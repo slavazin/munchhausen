@@ -1,0 +1,27 @@
+# Quirk pack `analytics-v1` over adapter `sample_analytics` (SPEC § 4.2).
+# A pack names registered transforms and supplies parameters; it never carries code.
+# Kickoff checks (SPEC § 4.2 verify): field types (price/total stored as strings), the ticker set in
+# `transactions`, the distribution of `accounts.limit`. Q6 members and Q7 threshold are fixed after them.
+#
+# HIDDEN: nothing in this file may reach `terms`, the proposer prompt or the learner's stores.
+
+id: analytics-v1
+adapter: sample_analytics
+
+drift_schedule:            # gold-only; the `world` database is never mutated after build
+  D1: {at_knob: D1_AT, quirk: Q1_active_customer}
+  D2: {at_knob: D2_AT, quirk: Q4_fiscal_year}
+
+quirks: []                 # M1: Q1–Q8, P1, N1 per SPEC § 4.2, each with ≥ 4 templates and ≥ 3 phrasings
+# Entry shape:
+#   - id: Q1_active_customer
+#     kind: taxonomic                       # taxonomic|procedural|floor|preference|poison
+#     prior_trap: mnemonic status codes; "active" means not closed
+#     materialize: {transform: assign_status_codes, params: {...}}
+#     gold: {transform: status_in, params: {active: [2, 7]}}
+#     signature: set_member
+#     templates: [active_count_by_year, ...]
+#     authority_phrasings: ["that's not how we count active customers", ...]
+#     drift: [{at_idx: D1_AT, gold_params: {active: [2, 4, 7]}}]
+
+poison_bank: []            # N1 variants: revenue without the fee, calendar-year FY, active including st=1, …

@@ -1,10 +1,31 @@
+# secrets
 .env
 .env.*
+!.env.example
+
+# OS / editors
 .DS_Store
-node_modules/
+.idea/
+.vscode/
+*.swp
+
+# python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 dist/
 build/
+
+# node (viewer tooling, if any)
+node_modules/
+
+# local run output (traces, response caches, scratch exports)
+var/
+*.jsonl

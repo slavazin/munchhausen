@@ -1,0 +1,30 @@
+# Virtual uv workspace root. Bounded contexts are separate packages:
+#   engine/  -> `munchhausen`         (domain, ports, application, infrastructure)
+#   viewer/  -> `munchhausen-viewer`  (presentation; depends on the engine through its ports only)
+[tool.uv.workspace]
+members = ["engine", "viewer"]
+
+[tool.uv.sources]
+munchhausen = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["engine/tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["UP040"]   # TypeAlias kept for pydantic-visible aliases
+
+[tool.ruff.lint.isort]
+known-first-party = ["munchhausen", "munchhausen_viewer"]

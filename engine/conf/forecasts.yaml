@@ -1,0 +1,8 @@
+# Pre-registered forecasts (SPEC § 11). Written to runs.forecasts before the first episode; never edited.
+# The report prints each one beside its reading, and a disagreement stands as a disagreement.
+forecasts:
+  F1: the self_ref calibration gap over D1_AT…D1_AT+150 exceeds its gap over the 150 episodes before D1_AT
+  F2: governed admits 0 N1-derived decisions; naive admits ≥ 1
+  F3: naive holds P1 at org scope; governed holds it at persona scope or not at all
+  F4: governed drift-to-supersede latency for D1 is below naive's (where naive resolves the drift at all)
+  F5: on quirk-bearing stream questions after round 10, governed stream accuracy ≥ naive's

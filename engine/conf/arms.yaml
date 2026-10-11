@@ -1,0 +1,38 @@
+# Arms (SPEC § 5). The engine branches on these fields, never on an arm's name.
+# `ports` selects implementations by name from munchhausen/ports/registry.py; written to runs.ports at start.
+
+default_ports:
+  representation: voyage-4
+  reranker: rerank-3
+  similarity: atlas-vector
+  grouper: agglomerative
+  lens_panel: none
+  memory_sink: "null"
+
+arms:
+  frozen:
+    authority: false
+    write_path: none
+    consultation: none
+    curator: null
+    claim: baseline; runs the V set only unless FROZEN_STREAM
+  self_ref:
+    authority: false
+    write_path: self_grade
+    consultation: semantic
+    curator: self_ref
+    claim: "self-reference: prior capture and drift blindness"
+  naive:
+    authority: true
+    write_path: direct
+    consultation: semantic
+    curator: naive
+    claim: an external signal without governance
+  governed:
+    authority: true
+    write_path: episodic
+    consultation: hooks
+    curator: governed
+    claim: governance
+    ports:
+      lens_panel: jev
