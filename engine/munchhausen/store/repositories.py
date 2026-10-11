@@ -542,6 +542,19 @@ class AtlasEvidence:
     async def episode_count(self, run_id: str) -> int:
         return await self._db[C.EPISODES.value].count_documents({"run_id": run_id})
 
+    async def observation_vectors(self, run_id: str, arm: str, emb_key: str) -> list[Doc]:
+        """E8 input (projection only): `{round, idx, vector}` per reducible observation of one arm
+        (disposition ≠ noise, via ≠ injection) holding `emb.<emb_key>`. `idx` is parsed from the episode id."""
+        q = {"run_id": run_id, "arm": arm, "disposition": {"$ne": "noise"}, "via": {"$ne": "injection"},
+             f"emb.{emb_key}": {"$exists": True}}
+        out = []
+        async for d in self._db[C.OBSERVATIONS.value].find(q, {"_id": 0, "round": 1, "episode_id": 1,
+                                                               f"emb.{emb_key}": 1}):
+            tail = str(d.get("episode_id", "")).rsplit(":e", 1)
+            idx = int(tail[1]) if len(tail) == 2 and tail[1].isdigit() else None
+            out.append({"round": int(d["round"]), "idx": idx, "vector": d["emb"][emb_key]})
+        return out
+
     async def snapshot(self, run_id: str) -> dict[str, list[Doc]]:
         q = {"run_id": run_id}
         out: dict[str, list[Doc]] = {

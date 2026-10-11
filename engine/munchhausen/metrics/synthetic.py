@@ -139,6 +139,27 @@ def _map(run_id: str, arm: str, did: str, quirk: str | None) -> dict[str, Any]:
             "scope": "org", "model": "synthetic", "at": "1970-01-01T00:00:00Z"}
 
 
+def observations(arms: Mapping[str, ArmSpec], *, run_length: int = 600, d1_at: int = 300, round_size: int = 30,
+                 dim: int = 16, seed: int = 5) -> dict[str, list[dict[str, Any]]]:
+    """E8 input rows `{round, idx, vector}`: before D1 observations stay near a few fixed directions; after D1
+    a new direction appears (the drifting quirk's misses read differently)."""
+    rng = np.random.default_rng(seed)
+    base = rng.normal(size=(3, dim))
+    new = rng.normal(size=dim)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for arm, spec in arms.items():
+        if spec.write_path.value != "episodic":
+            continue
+        rows = []
+        for r in range(run_length // round_size):
+            for j in range(4):
+                centre = new if (r * round_size >= d1_at and j < 2) else base[j % 3]
+                rows.append({"round": r, "idx": r * round_size + j,
+                             "vector": (centre + 0.05 * rng.normal(size=dim)).tolist()})
+        out[arm] = rows
+    return out
+
+
 def spend(arms: Mapping[str, ArmSpec], n: int = 600) -> list[dict[str, Any]]:
     out = []
     for arm in arms:

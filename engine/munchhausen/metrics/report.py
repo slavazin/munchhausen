@@ -137,6 +137,19 @@ def markdown(readings: Mapping[str, Any], run: Mapping[str, Any], *, against: Ma
                 out.append(f"| {arm} | {p_['idx_lo']}–{p_['idx_hi']} | {fmt(p_['diff'])} | "
                            f"[{fmt(p_['lo'])}, {fmt(p_['hi'])}] | {p_['n']} |")
         out.append("")
+    if readings.get("novelty"):
+        out.append("## Observation novelty by round (E8; exploratory, not pre-registered)")
+        out.append("")
+        out.append("novelty(arm, r) = mean over the arm's reducible observations written in round r (disposition ≠ "
+                   "noise, via ≠ injection) of the minimum cosine distance to any of the arm's observations from "
+                   f"rounds < r, on the run's registered embedder. Round 0 is undefined. Drifts: {readings['drifts']}.")
+        out.append("")
+        out.append("| arm | round | novelty (cosine distance) | n observations | n earlier |")
+        out.append("|---|---|---|---|---|")
+        for arm, pts in readings["novelty"].items():
+            for p_ in pts:
+                out.append(f"| {arm} | {p_['round']} | {p_['novelty']:.4f} | {p_['n']} | {p_['n_prior']} |")
+        out.append("")
     out.append("## Readings")
     out.append("")
     for r in readings["readings"]:
@@ -210,6 +223,11 @@ def manifest(readings: Mapping[str, Any], run_id: str) -> dict[str, Any]:
             figs[f"forecast.{f['id']}.{r['name']}"] = {"query": r["query"], "n": r["n"], "unit": r["unit"]}
     for r in readings["readings"]:
         figs[r["name"]] = {"query": r["query"], "n": r["n"], "unit": r["unit"]}
+    for arm, pts in (readings.get("novelty") or {}).items():
+        figs[f"curve.novelty.{arm}"] = {
+            "query": f"munchhausen.observations.find({{run_id: '{run_id}', arm: '{arm}', disposition: {{$ne: 'noise'}}, via: {{$ne: 'injection'}}}}, {{round, episode_id, emb.<registered key>}}) | metrics.readings.novelty_curve",
+            "n": sum(p["n"] for p in pts), "unit": "cosine distance (mean of per-observation minimum)",
+            "note": "exploratory, not pre-registered"}
     ref = readings.get("reference")
     for arm, pts in (readings.get("paired_curves") or {}).items():
         figs[f"curve.paired_vs_{ref}.{arm}"] = {
@@ -263,7 +281,8 @@ def html_report(readings: Mapping[str, Any], run: Mapping[str, Any], md_sentence
                 chartjs_url: str) -> str:
     e = html.escape
     data = json.dumps({"curves": readings["curves"], "v": readings["v_points"], "drifts": readings["drifts"],
-                       "paired": readings.get("paired_curves") or {}})
+                       "paired": readings.get("paired_curves") or {}, "novelty": readings.get("novelty") or {},
+                       "round_size": readings.get("round_size", 1)})
     parts = [f"<!doctype html><html lang=en><head><meta charset=utf-8>"
              f"<meta name=viewport content='width=device-width,initial-scale=1'><title>Evidence {e(readings['run_id'])}</title>"
              f"<style>{_CSS}</style><script src='{e(chartjs_url)}'></script></head><body><main>"]
@@ -275,7 +294,8 @@ def html_report(readings: Mapping[str, Any], run: Mapping[str, Any], md_sentence
     parts.append("<h2>Curves</h2><div class=grid>"
                  "<div class=card><b>Stream accuracy per round</b> <span class=mut>(fraction; stream episodes; dashed: drifts)</span><canvas id=acc></canvas></div>"
                  "<div class=card><b>Calibration gap per round</b> <span class=mut>(mean confidence − accuracy)</span><canvas id=gap></canvas></div>"
-                 f"<div class=card><b>Paired difference vs {e(str(readings.get('reference') or '—'))}</b> <span class=mut>(accuracy, rolling window; dashed: interval)</span><canvas id=pair></canvas></div></div>")
+                 f"<div class=card><b>Paired difference vs {e(str(readings.get('reference') or '—'))}</b> <span class=mut>(accuracy, rolling window; dashed: interval)</span><canvas id=pair></canvas></div>"
+                 "<div class=card><b>Observation novelty by round (E8)</b> <span class=mut>(exploratory, not pre-registered; mean min cosine distance to earlier rounds; dashed: drifts)</span><canvas id=nov></canvas></div></div>")
     parts.append("<h2>Forecasts beside their readings</h2>")
     for f in readings["forecasts"]:
         rows = []
@@ -332,5 +352,11 @@ pd.push({label:arm+' lo',data:pts.map(p=>({x:p.idx_hi,y:p.lo})),borderColor:c,bo
 pd.push({label:arm+' hi',data:pts.map(p=>({x:p.idx_hi,y:p.hi})),borderColor:c,borderWidth:0.6,pointRadius:0,borderDash:[2,2]});});
 Object.entries(D.drifts).forEach(([d,at])=>pd.push({label:d,data:[{x:at,y:-1},{x:at,y:1}],borderColor:mut,borderDash:[4,4],pointRadius:0,borderWidth:1}));
 new Chart(document.getElementById('pair'),{type:'line',data:{datasets:pd},options:{animation:false,
-scales:{x:{type:'linear',ticks:{color:mut}},y:{min:-1,max:1,ticks:{color:mut}}},plugins:{legend:{labels:{color:fg,boxWidth:10,filter:i=>!/ (lo|hi)$/.test(i.text)}}}}});})();
+scales:{x:{type:'linear',ticks:{color:mut}},y:{min:-1,max:1,ticks:{color:mut}}},plugins:{legend:{labels:{color:fg,boxWidth:10,filter:i=>!/ (lo|hi)$/.test(i.text)}}}}});
+const nd=Object.entries(D.novelty).map(([arm,pts],i)=>({label:arm,data:pts.map(p=>({x:(p.round+1)*D.round_size-1,y:p.novelty})),
+borderColor:pal[i%pal.length],backgroundColor:pal[i%pal.length],pointRadius:1.5,borderWidth:1.6}));
+const ymax=Math.max(0.05,...Object.values(D.novelty).flat().map(p=>p.novelty))*1.1;
+Object.entries(D.drifts).forEach(([d,at])=>nd.push({label:d,data:[{x:at,y:0},{x:at,y:ymax}],borderColor:mut,borderDash:[4,4],pointRadius:0,borderWidth:1}));
+new Chart(document.getElementById('nov'),{type:'line',data:{datasets:nd},options:{animation:false,
+scales:{x:{type:'linear',ticks:{color:mut}},y:{min:0,max:ymax,ticks:{color:mut}}},plugins:{legend:{labels:{color:fg,boxWidth:10}}}}});})();
 """

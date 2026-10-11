@@ -321,6 +321,10 @@ class EvidenceRepository(Protocol):
 
     async def put_mapping(self, mapping: PlantedMapping) -> None: ...
 
+    async def observation_vectors(self, run_id: str, arm: str, emb_key: str) -> list[dict[str, Any]]:
+        """E8: `{round, idx, vector}` per reducible observation (not noise, not injection) of one arm."""
+        ...
+
 
 @runtime_checkable
 class SpendRepository(Protocol):
