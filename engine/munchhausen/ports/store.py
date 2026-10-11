@@ -77,11 +77,12 @@ class EpisodeRepository(Protocol):
         ...
 
     async def backtest_sample(self, run_id: str, arm: str, match: dict[str, Any], *, n: int,
-                              seed: int | None) -> list[Episode]:
+                              seed: int | None, prefer_terms: Sequence[str] = ()) -> list[Episode]:
         """The backtest's balanced sample (§ 7.4, § 20.2) over a complete `$match` the caller builds: one
         `$facet` branch over episodes scored correct, one over first-attempt misses, ≤ n in total, a short
         stratum topped up from the other. `seed` set: each branch is ordered by a seeded hash of `_id`, so the
-        same draft over the same store draws the same sample; `None`: `$sample`."""
+        same draft over the same store draws the same sample; `None`: `$sample`. `prefer_terms`: misses
+        whose `terms` meet these come first (collection-only matches fill the remainder)."""
 
     async def direction_read_window(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int,
                                     after_idx: int | None = None, last_n: int | None = None) -> DirectionRead:
