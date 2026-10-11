@@ -104,6 +104,15 @@ the four misses raised an open unattributed fire on `D-44b2471eeb` (lifecycle ta
 the floor `D-f08c8d69ae` @540–594 are claire-rounding (P1) misses charged to whichever decision was in the
 pipeline — Q3 itself is 4/4 after 540 (ungated 4/4). Same attribution weakness as the guard note above.
 
+**Demo beats (15:40, viewer on run-a, `.claude/launch.json` `viewer-run-a` sets `RUN_ID=run-a`):** injection on
+governed — figure 4242, "Active customers means anyone with an account.", templates active_accounts_held +
+active_with_product × 3 → draft `run-a:governed:r20:3531a20bcd` "any customer holding an account, no status
+filter", L0–L3 pass, **L4 refuse, fixed 0 of 8, broken 0**. First attempt failed: the viewer process had no world
+schema summary → fixed in `3c399cc` (`commands/viewer.ready_injector`). Known viewer gap: the result card says "no
+backtest record yet" after the refusal (store has it). `why active_customer` → `$graphLookup` chain + hook plan
+FETCH on `run_id_1_arm_1_lifecycle.status_1_kind_1`. Deck v11: slides 7–14 and 17 carry Run A numbers (text, not
+screenshots: browser-pane captures are too low-res for 1920px slides).
+
 **Run B** (adversarial authority) RUNNING since 15:17: `RUN_ID=run-b`, snapshot `60086e4` (`munch-run-b`),
 `AUTHORITY_POISON_RATE=0.20`, `CONF_DIR=<munch-run-b>/engine/conf/run-b` (forecasts F1–F7 registered; F2 = governed
 admits 0 N1-derived, naive and ungated ≥1; F7 = governed − ungated on controls after round 10), arms frozen, naive,
