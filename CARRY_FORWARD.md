@@ -172,8 +172,15 @@ floor @540; 12 `why active_customer` screenshot; 13 F1–F7 readings (show REGIS
 currently says "F6 expected below": replace with the registered claim); 17 test/commit counts (442 tests);
 18 repo link. Add Run B slide (poison 0.20) if it reads. Revise the deck by its url (read deck.json first).
 
-**Git:** local `m0-scaffold` HEAD ≥ `60086e4`. `origin/m0-scaffold` DELETED at user's request; origin has only `main`.
-Do not push anything until the history rewrite (step 6 below). User asked to hold private info.
+**Git (16:25): history rewritten and pushed.** The 95 commits on `m0-scaffold` above `main` (`ab6a596`) were
+rewritten with `git filter-branch` in a fresh clone: absolute local paths → `<repo>`/`<workspace>`, the old
+key-format note dropped, author/committer email → `64709729+slavazin@users.noreply.github.com`; final tree
+byte-identical to the pre-rewrite HEAD. Pushed as a new branch `origin/m0-scaffold` (`c4cd989`); `main` untouched
+(its 3 pre-event commits still carry the gmail address — rewriting them needs a force-push of `main`, user's call).
+Local `m0-scaffold` reset to the rewritten branch. Backup of every pre-rewrite ref:
+`var/backup/pre-rewrite-20261011-1617.bundle`. Old SHAs cited in this file (e.g. `3c399cc`, `60086e4`) refer to
+the pre-rewrite history; the run snapshot worktrees (`munch-run-*`) still sit on those old commits. New commits
+need the noreply email (repo `user.email` is still the gmail one). Merge to `main` only on the user's go-ahead.
 
 **Post-run checklist (in order):**
 1. When every arm ends: re-close `rounds` for `run-a` with HEAD code (arms wrote round records with different
