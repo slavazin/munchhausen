@@ -360,3 +360,13 @@ def test_windows_never_labelled_past_the_last_index(s: Settings) -> None:
     curves = R.rolling_paired(rows, ctx, "frozen")
     assert max(p["idx_hi"] for p in curves["governed"]) == 239
     assert max(p["idx_hi"] for p in R.stream_curve(rows, ctx, "governed")) == 239
+
+
+def test_paired_accuracy_controls_population_and_unknown_population_refused(run) -> None:  # noqa: ANN001
+    import pytest
+
+    rows, ctx = run
+    r, _ = R.paired_accuracy(rows, ctx, "governed", "ungated", population="controls", after_round=10, margin=0.05)
+    assert r.population.startswith("control stream questions")
+    with pytest.raises(ValueError):
+        R.paired_accuracy(rows, ctx, "governed", "ungated", population="contrls", after_round=10, margin=0.05)

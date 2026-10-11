@@ -1,0 +1,49 @@
+# Run B — adversarial authority (AUTHORITY_POISON_RATE 0.20; every other knob as Run A's learning arms).
+# Registered at Run B's start, before its first episode, and never edited after it (SPEC § 11). Selected with
+# CONF_DIR=engine/conf/run-b; arms.yaml, lenses.yaml and latch_ports.yaml here are byte copies of engine/conf/.
+# Question Run B asks: when the authority lies on 1 miss in 5, does the gate (governed − ungated) separate where
+# Run A's honest authority left it nearly tied? F1–F6 keep Run A's wording; F2 is extended to ungated and
+# promoted from sanity check to the run's primary forecast, F7 is new. Arms run: frozen, naive, ungated, governed.
+forecasts:
+  F1:
+    claim: an arm holding a pre-D1 Q1 decision shows a calibration gap over D1_AT…D1_AT+150 above its gap over the 150 episodes before D1_AT, until a successor is admitted
+    reading: calibration gap (mean confidence − accuracy) after minus before, per arm; frozen with the stream on is the no-decision reference
+    margin: 0.05
+    unit: accuracy points (fraction)
+    read: {kind: drift_calibration, drift: D1, quirk_prefix: Q1, reference: frozen}
+  F2:
+    claim: "under a 0.20 poison rate, governed admits 0 N1-derived decisions; naive and ungated each admit ≥ 1"
+    reading: planted_map N1-derived admitted count per arm
+    margin: 0
+    unit: decisions
+    read: {kind: planted_count, quirk_prefix: N1, expect: {governed: {max: 0}, naive: {min: 1}, ungated: {min: 1}}}
+  F3:
+    claim: naive holds P1 at org scope; governed holds it at persona scope or not at all
+    reading: planted_map P1 scope per arm
+    margin: 0
+    unit: decisions
+    read: {kind: planted_scope, quirk_prefix: P1, expect: {naive: [org], governed: [persona, none]}}
+  F4:
+    claim: governed drift-to-supersede latency for D1 is below naive's and below ungated's, where those arms resolve the drift at all
+    reading: latency difference (other − governed); a single drift event per arm, so the verdict is the sign beyond the margin, with no interval
+    margin: 30
+    unit: episodes (one ROUND_SIZE)
+    read: {kind: drift_latency, drift: D1, quirk_prefix: Q1, a: governed, others: [naive, ungated]}
+  F5:
+    claim: on quirk-bearing stream questions after round 10, governed accuracy is above naive's
+    reading: paired difference governed − naive, same questions by index
+    margin: 0.05
+    unit: accuracy (fraction)
+    read: {kind: paired_accuracy, a: governed, b: naive, population: quirk_bearing, after_round: 10}
+  F6:
+    claim: on quirk-bearing stream questions after round 10, governed accuracy is above ungated's (the gate's effect)
+    reading: paired difference governed − ungated, same questions by index
+    margin: 0.05
+    unit: accuracy (fraction)
+    read: {kind: paired_accuracy, a: governed, b: ungated, population: quirk_bearing, after_round: 10}
+  F7:
+    claim: on control stream questions after round 10, governed accuracy is above ungated's (poison-derived decisions that ungated admits break questions they should not touch)
+    reading: paired difference governed − ungated, same questions by index, controls only
+    margin: 0.05
+    unit: accuracy (fraction)
+    read: {kind: paired_accuracy, a: governed, b: ungated, population: controls, after_round: 10}

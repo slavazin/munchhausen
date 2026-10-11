@@ -205,6 +205,17 @@ def paired_accuracy(rows: Mapping[str, list[Row]], ctx: Context, a: str, b: str,
             return r, "unread"
         keep = lambda e: e["idx"] >= after_idx and e.get("template") in ctx.template_quirk  # noqa: E731
         pop = f"quirk-bearing stream questions with idx ≥ {after_idx} (round ≥ {after_round}), paired by idx"
+    elif population == "controls":
+        if not ctx.template_quirk:
+            r = Reading(f"paired_accuracy.{a}-{b}", None, "accuracy (fraction)", "unread", 0,
+                        q_find("episodes", "stream: 'stream'", "paired_accuracy"),
+                        note="pack template→quirk map unavailable: the control population cannot be read")
+            return r, "unread"
+        keep = lambda e: e["idx"] >= after_idx and e.get("template") not in ctx.template_quirk  # noqa: E731
+        pop = (f"control stream questions (no quirk template) with idx ≥ {after_idx} (round ≥ {after_round}), "
+               "paired by idx")
+    elif population != "all":
+        raise ValueError(f"paired_accuracy: unknown population {population!r}")
     else:
         keep = lambda e: e["idx"] >= after_idx  # noqa: E731
         pop = f"stream questions with idx ≥ {after_idx}, paired by idx"

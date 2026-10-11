@@ -1,0 +1,60 @@
+# Lens entries (SPEC § 23.2). Mirrored to the `lenses` collection with a version on every change.
+# Every lens here is `counterfactual_anchor: seed` — authored before any overshoot was observed, and disclosed as such.
+
+weights_v0:
+  version: 0
+  bias: 0.0
+  weights: {generalizes: 1.0, case_leak: -2.0, org_fact: 0.0, contradicts_neighbor: 0.0, mechanizable: 0.0}
+
+lenses:
+  - id: generalizes
+    angle: Which future questions, beyond the cited sources, does this decision change the answer to?
+    counterfactual: Name the source question it fits only by coincidence; a decision fitted to its sources answers none beyond them.
+    product: noul
+    pointer: [draft.payload, draft.latches.hook, sources.noticed]
+    role: corroborating
+    phrasings:
+      - Which future questions, beyond the cited sources, does this decision change the answer to?
+      - Beyond the questions it was drawn from, where would this decision change an answer?
+      - What questions not among the sources would be answered differently under this decision?
+  - id: case_leak
+    angle: What reading would show the payload encodes one question's answer value rather than a definition?
+    counterfactual: Name the second question the payload answers correctly; a definition with no second question is an answer sheet.
+    product: noul
+    pointer: [draft.payload, sources.noticed]
+    role: corroborating
+    phrasings:
+      - What reading would show the payload encodes one question's answer value rather than a definition?
+      - What would show this payload is a single answer in disguise rather than a rule?
+      - Which reading makes this payload a stored answer instead of a definition?
+  - id: org_fact
+    angle: What reading would show this is one persona's preference rather than an organizational definition?
+    counterfactual: Name the persona whose question this decision would answer wrongly at org scope.
+    product: noul
+    pointer: [draft.payload, draft.latches.hook, sources.noticed]
+    role: routing
+    phrasings:
+      - What reading would show this is one persona's preference rather than an organizational definition?
+      - What would show this holds for one requester only, not for the organization?
+      - Which reading makes this a personal convention rather than an organizational definition?
+  - id: contradicts_neighbor
+    angle: What reading would show this draft and a neighbour can't both hold?
+    counterfactual: Name the question both hooks match; without one, the contradiction is moot and routing it as supersede is the error.
+    product: noul
+    pointer: [draft.payload, draft.latches.hook, neighbours.payload]
+    role: routing
+    phrasings:
+      - What reading would show this draft and a neighbour can't both hold?
+      - Which reading makes this draft and an admitted neighbour mutually exclusive?
+      - What would show that holding both this draft and a neighbour yields two answers to one question?
+  - id: mechanizable
+    angle: Is the payload checkable as a $match predicate on one collection?
+    counterfactual: Name the question shape the predicate would wrongly filter.
+    product: choice
+    levels: [floor, taxonomic, procedural, preference, none]
+    pointer: [draft.payload, draft.kind]
+    role: routing
+    phrasings:
+      - Is the payload checkable as a $match predicate on one collection?
+      - Could this payload be enforced as a single-collection filter?
+      - Does this payload reduce to one $match stage over one collection?

@@ -1,0 +1,16 @@
+# Latch types by decision kind (SPEC § 10.2, § 15). L0 refuses an entry whose latch fan breaks these.
+# required: must be present; allowed: may be present; owner: the consumer that disposes the latch's fires.
+
+latch_types:
+  hook:    {owner: hooks.match,      role: routing}
+  revisit: {owner: loop.residuals,   role: dispositive}
+  floor:   {owner: tool_access,      role: enforcement}
+  retire:  {owner: learn.lifecycle,  role: lifecycle}
+  wiring:  {owner: store.decisions,  role: lineage}
+
+kinds:
+  taxonomic:      {required: [hook, revisit, wiring], allowed: [retire]}
+  procedural:     {required: [hook, revisit, wiring], allowed: [retire]}
+  preference:     {required: [hook, revisit, wiring], allowed: [retire]}
+  floor:          {required: [hook, revisit, floor, wiring], allowed: [retire]}
+  context_policy: {required: [hook, revisit, wiring], allowed: [retire]}
