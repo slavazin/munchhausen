@@ -42,3 +42,19 @@ def paired_difference(a: Sequence[float], b: Sequence[float], *, n_boot: int, le
     tail = (1.0 - level) / 2.0
     lo, hi = np.quantile(means, [tail, 1.0 - tail])
     return PairedReading(diff=float(d.mean()), lo=float(lo), hi=float(hi), n=int(d.size), level=level)
+
+
+def difference_of_means(after: Sequence[float], before: Sequence[float], *, n_boot: int, level: float,
+                        seed: int) -> PairedReading:
+    """Unpaired percentile bootstrap of mean(after) − mean(before): two windows of one arm (F1). Each window
+    is resampled on its own. `n` is the smaller window, the one that bounds the interval."""
+    a, b = np.asarray(after, dtype=float), np.asarray(before, dtype=float)
+    if a.size == 0 or b.size == 0:
+        return PairedReading(diff=float("nan"), lo=float("nan"), hi=float("nan"), n=0, level=level)
+    rng = np.random.default_rng(seed)
+    ma = a[rng.integers(0, a.size, size=(n_boot, a.size))].mean(axis=1)
+    mb = b[rng.integers(0, b.size, size=(n_boot, b.size))].mean(axis=1)
+    tail = (1.0 - level) / 2.0
+    lo, hi = np.quantile(ma - mb, [tail, 1.0 - tail])
+    return PairedReading(diff=float(a.mean() - b.mean()), lo=float(lo), hi=float(hi),
+                         n=int(min(a.size, b.size)), level=level)

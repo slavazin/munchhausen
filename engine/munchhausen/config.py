@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from munchhausen.domain.arm import ArmSpec
@@ -48,9 +48,14 @@ class Settings(BaseSettings):
     search_index_cap: int = 3           # M0/Flex sandbox: 3 search-type indexes in total; verify at M0
 
     # --- keys (SDKs also read their own env vars; held here so `doctor` can report presence) ---------
+    # Aliases accept the names the user's `.env` carries; the canonical UPPER_CASE names still win.
     anthropic_api_key: SecretStr | None = None
-    voyage_api_key: SecretStr | None = None
-    typesafe_api_key: SecretStr | None = None
+    anthropic_auth_token: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("ANTHROPIC_AUTH_TOKEN", "anthropic_auth_token", "claude_oauth_key"))
+    voyage_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("VOYAGE_API_KEY", "voyage_api_key", "voyage_key"))
+    typesafe_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("TYPESAFE_API_KEY", "typesafe_api_key", "typesafe_key"))
     raindrop_write_key: SecretStr | None = None
     raindrop_query_key: SecretStr | None = None
 
@@ -120,6 +125,23 @@ class Settings(BaseSettings):
     # --- readings ------------------------------------------------------------------------------------
     bootstrap_n: int = 2000             # resamples for paired arm differences
     ci_level: float = 0.90              # interval level for every paired difference and forecast verdict
+    readings_seed: int = 17             # bootstrap seed for every reading (a report re-derives byte-identically)
+    drift_window: int = 150             # F1: episodes before and after a drift index read for the gap
+    backtest_premise_first: int = 10    # § 12 premise: the first N backtests per arm
+    backtest_premise_share: float = 0.5 # § 12 premise: share of encoded misses the replay must fix
+    # USD per million tokens, per model id (Anthropic first-party list prices, read 2026-10-11).
+    # cache_write is the 5-minute write rate (1.25 × input). A model missing here is priced at 0 and the
+    # report says so (`unpriced_models`).
+    model_prices_usd_per_mtok: dict[str, dict[str, float]] = {
+        "claude-haiku-4-5": {"in": 1.0, "out": 5.0, "cache_read": 0.10, "cache_write": 1.25},
+        "claude-haiku-5-5": {"in": 0.10, "out": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+        "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_read": 0.20, "cache_write": 2.50},
+        "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_read": 0.20, "cache_write": 5.0},
+    }
+    response_cache: bool = False        # cache parsed model responses under var/cache/ (trace-invariance replay)
+    planted_map_concurrency: int = 4    # concurrent planted-map judge calls (evaluation only)
+    anthropic_oauth_beta: str = "oauth-2025-04-20"   # beta header sent when authenticating with an OAuth token
+    chartjs_url: str = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 
     # --- models --------------------------------------------------------------------------------------
     proposer_model: str = "claude-haiku-4-5"
@@ -193,6 +215,33 @@ class Settings(BaseSettings):
 
     def pack_path(self, name: str | None = None) -> Path:
         return self.packs_dir / f"{name or self.world_pack}.yaml"
+
+    def usd(self, model: str, tokens_in: int, tokens_out: int, cache_read: int = 0, cache_write: int = 0) -> float:
+        """List-price USD of one call from `MODEL_PRICES_USD_PER_MTOK`; 0 for an unpriced model."""
+        p = self.model_prices_usd_per_mtok.get(model)
+        if p is None:
+            return 0.0
+        return (tokens_in * p["in"] + tokens_out * p["out"] + cache_read * p.get("cache_read", 0.0)
+                + cache_write * p.get("cache_write", 0.0)) / 1e6
+
+    def isolation(self) -> Literal["roles", "convention"]:
+        """`roles` iff every per-role Atlas URI is set (SPEC § 20.2); otherwise gold isolation is by convention."""
+        roles = (self.mongodb_uri_learner, self.mongodb_uri_evaluator, self.mongodb_uri_executor)
+        return "roles" if all(r is not None for r in roles) else "convention"
+
+    def keys_present(self) -> dict[str, bool]:
+        """Presence of every secret knob. Never a value."""
+        secrets = [k for k, f in type(self).model_fields.items() if "SecretStr" in str(f.annotation)]
+        return {k: getattr(self, k) is not None for k in secrets}
+
+    def anthropic_auth_mode(self) -> Literal["api_key", "oauth", "none"]:
+        """Which credential the Anthropic client uses: the API key if present, else the OAuth token."""
+        if self.anthropic_api_key is not None:
+            return "api_key"
+        return "oauth" if self.anthropic_auth_token is not None else "none"
+
+    def model_ids(self) -> dict[str, str]:
+        return {k: v for k, v in self.knobs().items() if k.endswith("_model") and isinstance(v, str)}
 
 
 def _yaml(path: Path) -> dict[str, Any]:
