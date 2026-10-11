@@ -23,13 +23,14 @@ The direction read is windowed: from the nearest contested neighbour's earliest 
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from munchhausen.config import Settings
-from munchhausen.domain.common import EvidenceState, FireDisposition, FireRole
+from munchhausen.domain.common import DecisionKind, EvidenceState, FireDisposition, FireRole
 from munchhausen.domain.draft import DirectionRead, Draft, DraftStatus, LayerOutcome, Shape, Verdict
 from munchhausen.domain.ids import draft_id, shape_id
 from munchhausen.domain.observation import Observation, ObservationClass, ObservationDisposition
@@ -40,6 +41,20 @@ from munchhausen.ports.sinks import Trace
 from munchhausen.ports.store import DraftRepository, EpisodeRepository, FireRepository, ObservationRepository
 
 RENOMINATED = "renominated"
+
+
+def _unit(key: str) -> float:
+    return int(hashlib.sha256(key.encode()).hexdigest()[:12], 16) / 16**12
+
+
+@dataclass(frozen=True)
+class Fold:
+    """The held-out template fold of one shape: what the nominator is shown, and what is withheld."""
+
+    shape: Shape                          # the shape the nominator sees (the whole shape when nothing is held out)
+    members: tuple[Observation, ...]
+    templates: tuple[str, ...]            # withheld templates
+    withheld: tuple[str, ...]             # withheld observation ids
 
 
 def norm(term: str) -> str:
@@ -175,13 +190,31 @@ class EpisodicPass:
     trace: Trace | None = None
     fires: FireRepository | None = None      # dates a contested neighbour's drift (earliest open dispositive fire)
     direction_window: int | None = None      # DIRECTION_WINDOW; None reads every matched episode (cumulative)
+    holdout_templates: int | None = None     # HOLDOUT_TEMPLATES; 0 / None disables the held-out template fold
+    min_templates_floor: int | None = None   # BAR_MIN_TEMPLATES_FLOOR (L1's need for kind floor)
+    holdout_seed: int | None = None          # tie-break seed for the fold
+    settings: Settings | None = None         # when given, fills every knob above that was left unset
+
+    def __post_init__(self) -> None:
+        s = self.settings
+        if s is None:
+            return
+        if self.direction_window is None:
+            self.direction_window = s.direction_window
+        if self.holdout_templates is None:
+            self.holdout_templates = s.holdout_templates
+        if self.min_templates_floor is None:
+            self.min_templates_floor = s.bar_min_templates_floor
+        if self.holdout_seed is None:
+            self.holdout_seed = s.stream_seed
 
     @classmethod
     def from_settings(cls, s: Settings, **ports: Any) -> EpisodicPass:
         """Knobs from settings; ports (observations, episodes, drafts, grouper, nominator, adjudicator,
         fires, trace, with_authority) from the composition root."""
         return cls(bar=Bar.from_settings(s), round_size=s.round_size, carry_rounds=s.carry_rounds,
-                   direction_window=s.direction_window, **ports)
+                   direction_window=s.direction_window, holdout_templates=s.holdout_templates,
+                   min_templates_floor=s.bar_min_templates_floor, holdout_seed=s.stream_seed, **ports)
 
     async def run(self, run_id: str, arm: str, round_: int,
                   idx_range: tuple[int, int] | None = None) -> PassReport:
@@ -225,16 +258,20 @@ class EpisodicPass:
             if not members:
                 self._refuse(report, arm, round_, shape, "predates drift")
                 return
+        fold = self.fold(shape, members)
         report.shapes.append(shape.id)
         self._event("shape.formed", {"arm": arm, "round": round_, "shape_id": shape.id,
                                      "n_obs": len(members), "templates": sorted(shape.templates),
                                      "personas": sorted(shape.personas), "terms": sorted(shape.terms),
                                      "grouper": self.grouper.id, "drift_from": drift_from,
-                                     "coherent_by": coherent(members) if len(members) > 1 else None})
+                                     "coherent_by": coherent(members) if len(members) > 1 else None,
+                                     "holdout_templates": list(fold.templates),
+                                     "nominated_shape_id": fold.shape.id})
 
-        existing = await self.drafts.get(draft_id(run_id, arm, round_, shape.id))
+        all_ids = shape.observation_ids
+        existing = await self.drafts.get(draft_id(run_id, arm, round_, fold.shape.id))
         if existing is not None:   # idempotent re-run of this (arm, round)
-            await self._resume(existing, members, neighbours, at_idx, report)
+            await self._resume(existing, all_ids, neighbours, at_idx, report)
             return
         reason = await self._bar(run_id, arm, round_, shape, members, at_idx, drift_from)
         to_close: list[Draft] = []
@@ -244,15 +281,15 @@ class EpisodicPass:
             self._refuse(report, arm, round_, shape, reason)
             return
         try:
-            nom = await self.nominator.nominate(run_id, arm, round_, shape, members, neighbours)
+            nom = await self.nominator.nominate(run_id, arm, round_, fold.shape, fold.members, neighbours)
         except Exception as e:  # noqa: BLE001 - one failed nomination never sinks the round
             report.failed.append((shape.id, f"{type(e).__name__}: {e}"))
             self._event("nomination.failed", {"arm": arm, "round": round_, "shape_id": shape.id,
                                               "error": f"{type(e).__name__}: {e}"})
             return
-        draft = nom.draft
+        draft = self._with_fold(nom.draft, shape, members, fold)
         await self.drafts.put(draft)
-        await self.observations.dispose(shape.observation_ids, ObservationDisposition.SHAPED, by=draft.id)
+        await self.observations.dispose(all_ids, ObservationDisposition.SHAPED, by=draft.id)
         report.drafts.append(draft.id)
         self._event("draft.written", draft_event(draft, nom.neighbours))
         for h in to_close:
@@ -260,29 +297,74 @@ class EpisodicPass:
             await self.drafts.record(h.id, LayerOutcome(layer=RENOMINATED, role=None, verdict=Verdict.REFUSE,
                                                         detail={"renominated_as": draft.id}))
             self._event("draft.renominated", {"arm": arm, "held": h.id, "successor": draft.id})
-        await self._adjudicate(draft, members, nom.neighbours, at_idx, report)
+        shown = [o for o in members if o.id in set(draft.source_observation_ids)]
+        await self._adjudicate(draft, all_ids, nom.neighbours, at_idx, report, shown)
 
-    async def _resume(self, draft: Draft, members: list[Observation], neighbours: Sequence[tuple[Any, float]],
+    # --- the held-out template fold ------------------------------------------------------------------
+
+    def fold(self, shape: Shape, members: Sequence[Observation]) -> Fold:
+        """Withhold `holdout_templates` templates (fewest observations first; ties by a seeded hash of
+        (shape, template)) when the shape spans >= BAR_MIN_TEMPLATES + HOLDOUT_TEMPLATES templates and the
+        rest still clears the bar on its own. Otherwise nothing is withheld."""
+        k = self.holdout_templates or 0
+        whole = Fold(shape=shape, members=tuple(members), templates=(), withheld=())
+        if k <= 0 or len(shape.templates) < self.bar.min_templates + k:
+            return whole
+        count = Counter(o.template for o in members)
+        order = sorted(shape.templates, key=lambda t: (count[t], _unit(f"{self.holdout_seed or 0}:{shape.id}:{t}")))
+        out = frozenset(order[:k])
+        kept = [o for o in members if o.template not in out]
+        rest = shape_of(kept)
+        if not kept or not self.bar.clears(rest, kept):
+            return whole
+        return Fold(shape=rest, members=tuple(kept), templates=tuple(sorted(out)),
+                    withheld=tuple(sorted(o.id for o in members if o.template in out)))
+
+    def _with_fold(self, draft: Draft, shape: Shape, members: Sequence[Observation], fold: Fold) -> Draft:
+        """Record the fold on the draft. A floor draft needs BAR_MIN_TEMPLATES_FLOOR templates at L1; if the
+        fold leaves fewer, it is undone: the withheld observations join the warrant and the seen list
+        (conservative: their episodes leave the backtest population), and nothing is held out."""
+        if not fold.templates:
+            return draft
+        floor_need = self.min_templates_floor or 0
+        if draft.kind is DecisionKind.FLOOR and len(fold.shape.templates) < floor_need:
+            warrant = draft.warrant.model_copy(update={
+                "source_observation_ids": shape.observation_ids, "source_episode_ids": shape.episode_ids,
+                "templates": len(shape.templates)})
+            seen = tuple(sorted(set(draft.nominator_seen_episode_ids) | set(shape.episode_ids)))
+            self._event("holdout.undone", {"arm": draft.arm, "draft_id": draft.id, "kind": draft.kind.value,
+                                           "templates": list(fold.templates)})
+            return draft.model_copy(update={"warrant": warrant, "source_observation_ids": shape.observation_ids,
+                                            "nominator_seen_episode_ids": seen})
+        return draft.model_copy(update={"holdout_templates": fold.templates,
+                                        "holdout_observation_ids": fold.withheld})
+
+    async def _resume(self, draft: Draft, all_ids: Sequence[str], neighbours: Sequence[tuple[Any, float]],
                       at_idx: int, report: PassReport) -> None:
         """A pending draft (adjudication never finished) is re-adjudicated; a terminal one repairs its
         sources' disposition; a held one waits (its sources are open by the hold rule)."""
-        ids = draft.source_observation_ids
+        ids = tuple(sorted(set(all_ids) | set(draft.source_observation_ids) | set(draft.holdout_observation_ids)))
         if draft.status is DraftStatus.PENDING:
             await self.observations.dispose(ids, ObservationDisposition.SHAPED, by=draft.id)
             report.resumed.append(draft.id)
             self._event("draft.resumed", {"arm": draft.arm, "draft_id": draft.id})
-            await self._adjudicate(draft, members, neighbours, at_idx, report)
+            shown = [o for o in await self._observations_by_id(draft.source_observation_ids)]
+            await self._adjudicate(draft, ids, neighbours, at_idx, report, shown)
         elif draft.status in (DraftStatus.ADMITTED, DraftStatus.REFUSED):
             await self.observations.dispose(ids, ObservationDisposition.SPENT, by=draft.id)
             report.refused.append((draft.shape_id, "nominated"))
         else:
             report.refused.append((draft.shape_id, "held"))
 
-    async def _adjudicate(self, draft: Draft, members: list[Observation],
-                          neighbours: Sequence[tuple[Any, float]], at_idx: int, report: PassReport) -> None:
-        ctx = CurationContext(run_id=draft.run_id, arm=draft.arm, at_idx=at_idx, sources=tuple(members),
+    async def _observations_by_id(self, ids: Sequence[str]) -> list[Observation]:
+        return [o for o in [await self.observations.get(i) for i in ids] if o is not None]
+
+    async def _adjudicate(self, draft: Draft, ids: Sequence[str], neighbours: Sequence[tuple[Any, float]],
+                          at_idx: int, report: PassReport, shown: Sequence[Observation]) -> None:
+        """`shown` (the context's sources) holds only the observations the nominator saw; `ids` (every
+        observation of the shape, the withheld fold included) follow the verdict's disposition."""
+        ctx = CurationContext(run_id=draft.run_id, arm=draft.arm, at_idx=at_idx, sources=tuple(shown),
                               neighbours=tuple(neighbours))
-        ids = draft.source_observation_ids
         try:
             outcomes = await self.adjudicator.adjudicate(draft, ctx)
         except Exception as e:  # noqa: BLE001 - evidence is never stranded `shaped` by a failed adjudication
@@ -371,12 +453,12 @@ class EpisodicPass:
         draft is then closed. Any other overlap waits (`held`)."""
         ids, close = set(shape.observation_ids), []
         for h in held:
-            hs = set(h.source_observation_ids)
+            hs = set(h.source_observation_ids) | set(h.holdout_observation_ids)
             if not hs & ids:
                 continue
             l1 = h.adjudication.get("L1")
             l1_hold = l1 is not None and l1.verdict is Verdict.HOLD
-            if hs < ids and (not l1_hold or len(shape.templates) > h.warrant.templates):
+            if hs < ids and (not l1_hold or len(shape.templates) > h.warrant.templates + len(h.holdout_templates)):
                 close.append(h)
             else:
                 return "held", []
@@ -403,5 +485,7 @@ def draft_event(draft: Draft, neighbours: Sequence[tuple[Any, float]]) -> dict[s
                      "figures_reproduced": list(o.figures_reproduced)} for o in draft.options],
         "figures_reproduced": list(draft.warrant.figures_reproduced),
         "nominator_seen_episode_ids": list(draft.nominator_seen_episode_ids),
+        "holdout_templates": list(draft.holdout_templates),
+        "source_templates": draft.warrant.templates,
         "sources": len(draft.source_observation_ids),
     }

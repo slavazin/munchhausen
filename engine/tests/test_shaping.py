@@ -367,7 +367,7 @@ NO_GAP = DirectionRead(misses_in=4, n_in=20, misses_out=20, n_out=100)
 
 def build(read: DirectionRead, verdict: Verdict, rows: Sequence[Observation], *, models: Models | None = None,
           admitted: Sequence[Decision] = (), fires: Fires | None = None, consultations: Sequence[Episode] = (),
-          window: int | None = None, adjudicator: Any = None,
+          window: int | None = None, adjudicator: Any = None, holdout: int = 0, bar: Bar | None = None,
           ) -> tuple[EpisodicPass, Observations, Drafts, Trace, Models]:
     store, drafts, trace, models = Observations(rows), Drafts(), Trace(), models or Models()
     episodes = Episodes(read, consultations)
@@ -375,9 +375,10 @@ def build(read: DirectionRead, verdict: Verdict, rows: Sequence[Observation], *,
                           decisions=Decisions(admitted), representation=NoRepresentation(), similarity=None,  # type: ignore[arg-type]
                           neighbour_k=5, residual_window=10, trace=trace)
     p = EpisodicPass(observations=store, episodes=episodes, drafts=drafts, grouper=SignatureBucketGrouper(),
-                     bar=Bar.from_settings(S), nominator=nominator,
+                     bar=bar or Bar.from_settings(S), nominator=nominator,
                      adjudicator=adjudicator or Adjudicator(verdict),
-                     round_size=30, trace=trace, fires=fires, direction_window=window)
+                     round_size=30, trace=trace, fires=fires, direction_window=window,
+                     holdout_templates=holdout, min_templates_floor=S.bar_min_templates_floor, holdout_seed=7)
     return p, store, drafts, trace, models
 
 
@@ -799,3 +800,87 @@ def test_replayed_q1_nomination_converges_with_profile_and_a_coded_field() -> No
     chosen = next(o for o in e.options if o.verdict == "chosen")
     assert chosen.figures_reproduced == ("r:a:e1", "r:a:e2")
     assert "customers__D-1" not in client.requests[0]["messages"][0]["content"]
+
+
+# --- held-out template fold (smoke-2) --------------------------------------------------------------
+
+
+class Warranting(Models):
+    """Fills the warrant from the input shape, as the party does."""
+
+    def __init__(self, kind: DecisionKind = DecisionKind.TAXONOMIC) -> None:
+        super().__init__()
+        self.kind = kind
+
+    async def nominate(self, inp: NominatorInput) -> tuple[EntryContract, tuple[str, ...]]:
+        self.inputs.append(inp)
+        e = entry()
+        w = e.warrant.model_copy(update={"source_observation_ids": inp.shape.observation_ids,
+                                         "source_episode_ids": inp.shape.episode_ids,
+                                         "templates": len(inp.shape.templates)})
+        return e.model_copy(update={"warrant": w, "kind": self.kind}), ()
+
+
+FOUR = [obs("o1", "r:a:e1", template="t1"), obs("o2", "r:a:e2", template="t1"),
+        obs("o3", "r:a:e3", template="t2"), obs("o4", "r:a:e4", template="t2"),
+        obs("o5", "r:a:e5", template="t3"), obs("o6", "r:a:e6", template="t3"),
+        obs("o7", "r:a:e7", template="t4")]
+
+
+def test_four_template_shape_withholds_the_thinnest_template_from_the_nominator() -> None:
+    from munchhausen.learn.backtest import population_filter
+
+    models = Warranting()
+    p, store, drafts, trace, _ = build(GAP, Verdict.REFUSE, FOUR, models=models, holdout=1)
+    (did,) = run(p.run("r", "a", 0)).drafts
+    d = drafts.rows[did]
+    inp = models.inputs[0]
+    assert {o.template for o in inp.sources} == {"t1", "t2", "t3"} and "r:a:e7" not in {e.id for e in inp.episodes}
+    assert d.holdout_templates == ("t4",) and d.holdout_observation_ids == ("o7",)
+    assert d.warrant.templates == 3 and "o7" not in d.warrant.source_observation_ids
+    assert "r:a:e7" not in d.warrant.source_episode_ids and "r:a:e7" not in d.nominator_seen_episode_ids
+    ctx = p.adjudicator.seen[0][1]
+    assert {o.template for o in ctx.sources} == {"t1", "t2", "t3"}
+    # S4's population: everything the warrant, the context and the nominator saw is excluded; t4 is not
+    seen_ids = set(d.warrant.source_episode_ids) | {o.episode_id for o in ctx.sources} | set(
+        d.nominator_seen_episode_ids)
+    flt = population_filter(d.hook, exclude_ids=sorted(seen_ids), exclude_questions=[], after_idx=None)
+    assert "r:a:e7" not in flt["_id"]["$nin"] and "r:a:e1" in flt["_id"]["$nin"]
+    # the withheld observation follows the shape's disposition
+    assert store.rows["o7"].disposition is ObservationDisposition.SPENT
+    formed = dict(trace.events)["shape.formed"]
+    assert formed["holdout_templates"] == ["t4"] and dict(trace.events)["draft.written"]["holdout_templates"] == ["t4"]
+
+
+def test_two_template_shape_holds_nothing_out() -> None:
+    p, _, drafts, _, models = build(GAP, Verdict.ADMIT, ROWS, holdout=1)
+    (did,) = run(p.run("r", "a", 0)).drafts
+    assert drafts.rows[did].holdout_templates == () and len(models.inputs[0].sources) == 2
+
+
+def test_a_fold_that_would_break_the_bar_is_not_taken() -> None:
+    rows = [obs("o1", "r:a:e1", template="t1"), obs("o2", "r:a:e2", template="t1"),
+            obs("o3", "r:a:e3", template="t2"), obs("o4", "r:a:e4", template="t3")]
+    bar = Bar(min_obs=4, min_templates=2, min_gap=S.bar_min_gap, min_matched=S.bar_min_matched)
+    p, _, drafts, _, models = build(GAP, Verdict.ADMIT, rows, holdout=1, bar=bar, models=Warranting())
+    (did,) = run(p.run("r", "a", 0)).drafts
+    assert drafts.rows[did].holdout_templates == () and len(models.inputs[0].sources) == 4
+
+
+def test_floor_draft_undoes_a_fold_that_leaves_fewer_than_the_floor_templates() -> None:
+    rows = FOUR[:6] + [obs("o7", "r:a:e7", template="t4")]
+    rows = [r for r in rows if r.template != "t3"]       # t1, t2, t4: the fold would leave 2 < 3
+    p, _, drafts, trace, models = build(GAP, Verdict.ADMIT, rows, holdout=1,
+                                        models=Warranting(DecisionKind.FLOOR))
+    (did,) = run(p.run("r", "a", 0)).drafts
+    d = drafts.rows[did]
+    assert d.holdout_templates == () and d.warrant.templates == 3 and "o7" in d.source_observation_ids
+    assert "r:a:e7" in d.nominator_seen_episode_ids and "holdout.undone" in trace.names()
+    assert {o.template for o in p.adjudicator.seen[0][1].sources} == {"t1", "t2", "t4"}
+
+
+def test_settings_fill_unset_knobs() -> None:
+    p = EpisodicPass(observations=None, episodes=None, drafts=None, grouper=None, bar=Bar.from_settings(S),  # type: ignore[arg-type]
+                     nominator=None, adjudicator=None, round_size=30, settings=S)  # type: ignore[arg-type]
+    assert (p.holdout_templates, p.direction_window, p.min_templates_floor) == (
+        S.holdout_templates, S.direction_window, S.bar_min_templates_floor)
