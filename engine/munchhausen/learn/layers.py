@@ -42,7 +42,7 @@ class L0Shape:
     async def check(self, draft: Draft, ctx: CurationContext) -> LayerOutcome:
         figures = [x for o in ctx.sources for x in (o.answer, o.figure) if isinstance(x, (int, float))]
         problems = draft.l0_violations(figures)
-        known = {t.term.lower() for t in await self.terms.all()} | escaped_terms(draft.new_terms)
+        known = {t.term.lower() for t in await self.terms.all(run_id=ctx.run_id)} | escaped_terms(draft.new_terms)
         unknown = sorted({t.lower() for t in draft.hook.fires_when.terms} - known)
         if unknown:
             problems.append(f"hook terms outside the vocabulary: {unknown}")

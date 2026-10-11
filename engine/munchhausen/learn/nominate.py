@@ -118,7 +118,7 @@ class Nominator:
             seen.update(eids)
         inp = NominatorInput(
             shape=shape, sources=tuple(members), episodes=tuple(episodes),
-            vocabulary=tuple(t.term for t in await self.terms.all()), world=self.world,
+            vocabulary=tuple(t.term for t in await self.terms.all(run_id=run_id)), world=self.world,
             neighbours=tuple(d for d, _ in neighbours), neighbour_residuals=residuals)
         try:
             entry, new_terms = await self.models.nominate(inp)

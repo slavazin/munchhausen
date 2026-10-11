@@ -280,7 +280,7 @@ class FakeTerms:
     def __init__(self, st: State) -> None:
         self.st = st
 
-    async def all(self) -> list[Term]:
+    async def all(self, *, run_id: str | None = None) -> list[Term]:
         return list(self.st.terms)
 
 
