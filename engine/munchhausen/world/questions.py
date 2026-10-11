@@ -5,7 +5,7 @@ Templates are pack data (`packs/*.yaml: templates`) × parameters (year, symbol,
 in `QuestionBank`; only `Question` crosses the World port.
 
 **One quirk per question.** A quirk-bearing template touches exactly one quirk; a preference persona (P1,
-Dana) is drawn on control templates only. With binary scoring, a question touching two quirks rewards a
+Claire) is drawn on control templates only. With binary scoring, a question touching two quirks rewards a
 correct decision for one of them with nothing until the other is admitted too, so the backtest can't
 credit it, the nominator can't reproduce its figures, and the authority's phrasing can name the quirk the
 answer got right. The pack's materialization places overlapping populations where the other quirks'
@@ -65,7 +65,7 @@ def render(template: Template, params: dict[str, Any]) -> str:
 class QuestionBank:
     """Generates questions and remembers each one's hidden tags for gold and the authority.
 
-    `persona_quirks` maps a preference persona to its quirk (Dana → P1); such a persona is drawn only on
+    `persona_quirks` maps a preference persona to its quirk (Claire → P1); such a persona is drawn only on
     control templates, and only on the controls its quirk lists (`quirk_templates`)."""
 
     def __init__(self, templates: tuple[Template, ...], personas: tuple[str, ...], quirk_share: float,

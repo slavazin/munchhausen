@@ -18,7 +18,7 @@
 
 id: analytics-v1
 adapter: sample_analytics
-personas: [priya, marco, dana]
+personas: [anna, benny, claire]
 
 drift_schedule:            # gold-only; the `world` database is never mutated after build
   D1: {at_knob: D1_AT, quirk: Q1_active_customer}
@@ -58,7 +58,7 @@ templates:
     args: {kind: sell}
     params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
              year: [2008, 2010, 2012, 2014, 2016]}
-  # Dana's controls need figures that vary and sit under ~1M, so rounding to the thousand is visible at
+  # Claire's controls need figures that vary and sit under ~1M, so rounding to the thousand is visible at
   # SCORE_REL_TOL (review 2026-10-11: avg_limit_product and accounts_limit_at_least round to constants).
   - id: shares_sold_month
     text: "How many shares were sold in {month_name} {year}?"
@@ -244,18 +244,18 @@ quirks:
       - "your tech names don't match the ones we report"
     definition: "Tech names are adbe, amd, crm, csco, intc, nvda, team and znga."
 
-  - id: P1_dana_rounding
+  - id: P1_claire_rounding
     kind: preference
-    persona: dana
+    persona: claire
     prior_trap: figures are quoted exactly for everyone
     gold: {transform: round_to, params: {unit: 1000}}
     signature: rounding
     templates: [sell_trades_year, shares_sold_symbol_year, shares_sold_month, sell_trades_since]
     authority_phrasings:
-      - "that's not how Dana likes her figures"
-      - "Dana never quotes numbers like that"
-      - "that isn't the presentation Dana asked for"
-    definition: "Dana's figures are rounded to the nearest thousand."
+      - "that's not how Claire likes her figures"
+      - "Claire never quotes numbers like that"
+      - "that isn't the presentation Claire asked for"
+    definition: "Claire's figures are rounded to the nearest thousand."
 
   - id: N1_stale_report
     kind: poison
@@ -267,6 +267,6 @@ poison_bank:               # N1: a figure from a stale variant, labelled like a 
   - {transform: variant_gold, params: {quirk: Q5_revenue, factor: 1.0}}            # sells without the fee
   - {transform: variant_gold, params: {quirk: Q1_active_customer, values: [1, 2, 7]}}  # active incl st=1
   - {transform: variant_gold, params: {quirk: Q3_soft_delete, value: 2}}           # the wrong code excluded
-  - {transform: variant_gold, params: {quirk: P1_dana_rounding, unit: 10000}}      # the wrong rounding
+  - {transform: variant_gold, params: {quirk: P1_claire_rounding, unit: 10000}}      # the wrong rounding
   - {transform: variant_gold, params: {quirk: Q6_tech_names,                       # a stale list (+aapl, msft)
                                        values: [adbe, amd, crm, csco, intc, nvda, team, znga, aapl, msft]}}

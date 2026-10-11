@@ -54,7 +54,7 @@ TEMPLATES: tuple[tuple[str, str, tuple[str, ...], str, str], ...] = (
     ("active_customer_share", "ops", ("active customers", "share"), "customers", "q1"),
     ("accounts_with_limit", "ops", ("accounts", "limit"), "accounts", "floor"),
     ("open_accounts_count", "finance", ("accounts",), "accounts", "floor"),
-    ("trades_by_symbol", "dana", ("transactions", "symbol"), "transactions", "control"),
+    ("trades_by_symbol", "claire", ("transactions", "symbol"), "transactions", "control"),
     ("revenue_by_quarter", "finance", ("revenue", "fiscal quarter"), "transactions", "control"),
 )
 Q1_HELDOUT = "active_customer_share"   # the unseen template Q1's decision is applied on

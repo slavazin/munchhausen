@@ -34,7 +34,7 @@ class Quirk(BaseModel):
     templates: tuple[str, ...] = ()
     authority_phrasings: tuple[str, ...] = ()
     drift: tuple[Drift, ...] = ()
-    persona: str | None = None          # preference quirks: the persona whose questions carry it (P1: dana)
+    persona: str | None = None          # preference quirks: the persona whose questions carry it (P1: claire)
     definition: str = ""                # hidden; spoken only at AUTHORITY_LEVEL=rule (a control setting)
     weight: float = 1.0                 # relative draw weight among quirk-bearing stream questions
     convention: TransformRef | None = None   # the prior trap as a gold transform (None: the base slots)

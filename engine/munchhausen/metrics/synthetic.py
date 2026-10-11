@@ -106,7 +106,7 @@ def rows(arms: Mapping[str, ArmSpec], *, run_id: str = "synthetic", run_length: 
             out["decisions"].append(_decision(run_id, arm, "D-naive-n1", 200, "admitted", 200, None))
             out["planted_map"].append(_map(run_id, arm, "D-naive-n1", "N1_poison"))
             out["decisions"].append(_decision(run_id, arm, "D-naive-p1", 230, "admitted", 230, None))
-            out["planted_map"].append(_map(run_id, arm, "D-naive-p1", "P1_dana_rounding"))
+            out["planted_map"].append(_map(run_id, arm, "D-naive-p1", "P1_claire_rounding"))
         if arms[arm].write_path.value == "episodic":
             for b in range(12):
                 sampled = [{"episode_id": f"{run_id}:{arm}:e{b * 30 + s}", "template": templates[s % 5],

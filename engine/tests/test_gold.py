@@ -74,43 +74,43 @@ V0, V1 = "v0", "v0+D1"
 
 CASES = [  # (template, persona, params, gold at v0, gold at v0+D1)
     # controls
-    ("customers_born_before", "priya", {"born_before": 1980}, 2, 2),
-    ("accounts_with_product", "priya", {"product": "Brokerage"}, 2, 2),
-    ("accounts_limit_at_least", "marco", {"limit_at_least": 9000}, 3, 3),
-    ("avg_limit_product", "priya", {"product": "Commodity"}, 6500.0, 6500.0),
-    ("sell_trades_year", "priya", {"year": 2010}, 2, 2),
-    ("shares_sold_symbol_year", "priya", {"symbol": "msft", "year": 2010}, 105, 105),
-    # P1: Dana on controls, rounded to the nearest thousand
-    ("shares_sold_month", "priya", {"month": 1, "year": 2010}, 100, 100),
-    ("shares_sold_month", "dana", {"month": 4, "year": 2012}, 0, 0),
-    ("sell_trades_since", "priya", {"year_from": 2011}, 3, 3),
-    ("sell_trades_since", "dana", {"year_from": 2010}, 0, 0),
-    ("avg_limit_product", "dana", {"product": "Commodity"}, 7000, 7000),     # round_to on a non-integer
+    ("customers_born_before", "anna", {"born_before": 1980}, 2, 2),
+    ("accounts_with_product", "anna", {"product": "Brokerage"}, 2, 2),
+    ("accounts_limit_at_least", "benny", {"limit_at_least": 9000}, 3, 3),
+    ("avg_limit_product", "anna", {"product": "Commodity"}, 6500.0, 6500.0),
+    ("sell_trades_year", "anna", {"year": 2010}, 2, 2),
+    ("shares_sold_symbol_year", "anna", {"symbol": "msft", "year": 2010}, 105, 105),
+    # P1: Claire on controls, rounded to the nearest thousand
+    ("shares_sold_month", "anna", {"month": 1, "year": 2010}, 100, 100),
+    ("shares_sold_month", "claire", {"month": 4, "year": 2012}, 0, 0),
+    ("sell_trades_since", "anna", {"year_from": 2011}, 3, 3),
+    ("sell_trades_since", "claire", {"year_from": 2010}, 0, 0),
+    ("avg_limit_product", "claire", {"product": "Commodity"}, 7000, 7000),     # round_to on a non-integer
     # Q1: active ⇔ st ∈ {2, 7}; D1 adds 4
-    ("active_born_from", "priya", {"born_from": 1965}, 1, 2),
-    ("active_with_product", "priya", {"product": "Commodity"}, 1, 2),
-    ("active_with_product", "priya", {"product": "Brokerage"}, 1, 1),
-    ("active_accounts_held", "priya", {"born_before": 2000}, 3, 5),
-    ("active_accounts_held", "priya", {"born_before": 1980}, 3, 3),
-    ("active_limit_total", "priya", {"product": "Commodity"}, 15000, 18000),
+    ("active_born_from", "anna", {"born_from": 1965}, 1, 2),
+    ("active_with_product", "anna", {"product": "Commodity"}, 1, 2),
+    ("active_with_product", "anna", {"product": "Brokerage"}, 1, 1),
+    ("active_accounts_held", "anna", {"born_before": 2000}, 3, 5),
+    ("active_accounts_held", "anna", {"born_before": 1980}, 3, 3),
+    ("active_limit_total", "anna", {"product": "Commodity"}, 15000, 18000),
     # Q3: rs == 3 excluded; deleted_at is a decoy and those batches count
-    ("buy_trades_year", "priya", {"year": 2010}, 1, 1),
-    ("trades_symbol_year", "priya", {"symbol": "msft", "year": 2010}, 3, 3),
-    ("shares_bought_symbol", "priya", {"symbol": "aapl"}, 20, 20),
-    ("batches_with_symbol", "priya", {"symbol": "msft"}, 3, 3),
-    ("batches_with_symbol", "priya", {"symbol": "aapl"}, 2, 2),
+    ("buy_trades_year", "anna", {"year": 2010}, 1, 1),
+    ("trades_symbol_year", "anna", {"symbol": "msft", "year": 2010}, 3, 3),
+    ("shares_bought_symbol", "anna", {"symbol": "aapl"}, 20, 20),
+    ("batches_with_symbol", "anna", {"symbol": "msft"}, 3, 3),
+    ("batches_with_symbol", "anna", {"symbol": "aapl"}, 2, 2),
     # Q5: Σ total of sells × 0.995 (totals stored as strings)
-    ("revenue_year", "priya", {"year": 2010}, 1099.5 * 0.995, 1099.5 * 0.995),
-    ("revenue_symbol", "priya", {"symbol": "aapl"}, 200.5 * 0.995, 200.5 * 0.995),
-    ("revenue_symbol_year", "priya", {"symbol": "msft", "year": 2010}, 1099.5 * 0.995, 1099.5 * 0.995),
-    ("revenue_month", "priya", {"month": 1, "year": 2010}, 995.0, 995.0),
+    ("revenue_year", "anna", {"year": 2010}, 1099.5 * 0.995, 1099.5 * 0.995),
+    ("revenue_symbol", "anna", {"symbol": "aapl"}, 200.5 * 0.995, 200.5 * 0.995),
+    ("revenue_symbol_year", "anna", {"symbol": "msft", "year": 2010}, 1099.5 * 0.995, 1099.5 * 0.995),
+    ("revenue_month", "anna", {"month": 1, "year": 2010}, 995.0, 995.0),
     # Q6: tech names = {adbe, amd, crm, csco, intc, nvda, team, znga}; msft and aapl are not members
-    ("tech_sell_trades_year", "priya", {"year": 2012}, 1, 1),
-    ("tech_sell_trades_year", "priya", {"year": 2010}, 0, 0),
-    ("tech_shares_sold_year", "priya", {"year": 2012}, 7, 7),
-    ("tech_sell_share_month", "priya", {"month": 4, "year": 2012}, 0.5, 0.5),
-    ("tech_sellers_year", "priya", {"year": 2012}, 1, 1),
-    ("tech_sellers_year", "priya", {"year": 2010}, 0, 0),
+    ("tech_sell_trades_year", "anna", {"year": 2012}, 1, 1),
+    ("tech_sell_trades_year", "anna", {"year": 2010}, 0, 0),
+    ("tech_shares_sold_year", "anna", {"year": 2012}, 7, 7),
+    ("tech_sell_share_month", "anna", {"month": 4, "year": 2012}, 0.5, 0.5),
+    ("tech_sellers_year", "anna", {"year": 2012}, 1, 1),
+    ("tech_sellers_year", "anna", {"year": 2010}, 0, 0),
 ]
 
 
@@ -139,14 +139,14 @@ def test_quirk_transforms_are_registered() -> None:
 
 
 async def test_poison_variants_differ_from_gold() -> None:
-    q1 = BANK.pose("active_born_from", "priya", {"born_from": 1960})
+    q1 = BANK.pose("active_born_from", "anna", {"born_from": 1960})
     assert await GOLDS.variant(q1, V0, "Q1_active_customer", {"values": [1, 2, 7]}) == 3
-    q5 = BANK.pose("revenue_year", "priya", {"year": 2010})
+    q5 = BANK.pose("revenue_year", "anna", {"year": 2010})
     assert await GOLDS.variant(q5, V0, "Q5_revenue", {"factor": 1.0}) == pytest.approx(1099.5)
-    q3 = BANK.pose("buy_trades_year", "priya", {"year": 2010})
+    q3 = BANK.pose("buy_trades_year", "anna", {"year": 2010})
     assert await GOLDS.variant(q3, V0, "Q3_soft_delete", {"value": 2}) == 2       # b3 (rs 2) out, b2 in
-    q3b = BANK.pose("shares_bought_symbol", "priya", {"symbol": "aapl"})
+    q3b = BANK.pose("shares_bought_symbol", "anna", {"symbol": "aapl"})
     assert await GOLDS.variant(q3b, V0, "Q3_soft_delete", {"value": 2}) == 0      # b3 is aapl's only buy
     assert GOLDS.compute(q3b, V0, FIXTURE, convention=True) == 0                  # decoy honoured: b3 out
-    q1 = BANK.pose("active_born_from", "priya", {"born_from": 1960})
+    q1 = BANK.pose("active_born_from", "anna", {"born_from": 1960})
     assert GOLDS.compute(q1, V0, FIXTURE, convention=True) == 4                   # every customer

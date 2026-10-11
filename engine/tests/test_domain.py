@@ -58,8 +58,8 @@ def test_hook_matches_on_terms_or_collections_and_respects_not_this() -> None:
 
 
 def test_persona_scope_is_required() -> None:
-    hook = HookLatch(fires_when=KeySet(terms=("revenue",), persona="dana"))
-    assert hook.matches(keys(terms=["revenue"], persona="dana"))
+    hook = HookLatch(fires_when=KeySet(terms=("revenue",), persona="claire"))
+    assert hook.matches(keys(terms=["revenue"], persona="claire"))
     assert not hook.matches(keys(terms=["revenue"], persona="omar"))
 
 

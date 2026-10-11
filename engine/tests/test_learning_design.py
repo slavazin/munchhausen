@@ -157,10 +157,10 @@ def test_one_quirk_per_question() -> None:
     with pytest.raises(ValueError, match="more than one quirk"):
         QuestionBank(templates=(Template(id="x", text="", collections=(), quirks=("Q1", "Q2")),),
                      personas=("omar",), quirk_share=0.65)
-    assert hidden_quirks(control, "dana", {"dana": "P1"}) == ("P1",)
-    assert hidden_quirks(q1, "omar", {"dana": "P1"}) == ("Q1",)
+    assert hidden_quirks(control, "claire", {"claire": "P1"}) == ("P1",)
+    assert hidden_quirks(q1, "omar", {"claire": "P1"}) == ("Q1",)
     with pytest.raises(ValueError, match="one quirk per question"):
-        hidden_quirks(q1, "dana", {"dana": "P1"})
+        hidden_quirks(q1, "claire", {"claire": "P1"})
 
 
 # --- the direction read --------------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Scoring (SPEC § 4.4): pure comparison of an answer against an expected figure.
 
-Numbers: relative tolerance (absolute tolerance after Dana rounding). Lists: set equality after
+Numbers: relative tolerance (absolute tolerance after Claire rounding). Lists: set equality after
 lower-casing. Only the first attempt counts toward accuracy — the caller decides which attempt this is.
 """
 

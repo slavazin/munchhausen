@@ -350,7 +350,7 @@ def test_guard_keeps_shared_terms_and_partitions_otherwise() -> None:
     a = [obs("o1", "e1", terms=("active customers", "accounts")), obs("o2", "e2", terms=("active customers",))]
     assert coherence_guard(shape_of(a), a)[0].terms == frozenset({"active customers"})
     b = [obs("o1", "e1", terms=("revenue",), phrasing="x"), obs("o2", "e2", terms=("revenue",), phrasing="y"),
-         obs("o3", "e3", terms=("fiscal quarter",), phrasing="z", delta=-3.0, persona="dana"),
+         obs("o3", "e3", terms=("fiscal quarter",), phrasing="z", delta=-3.0, persona="claire"),
          obs("o4", "e4", terms=(), phrasing="w")]
     split = coherence_guard(shape_of(b), b)
     assert sorted(s.observation_ids for s in split) == [("o1", "o2"), ("o3",)]
@@ -629,12 +629,12 @@ def test_adjudicator_exception_reopens_evidence_and_rerun_resumes_the_pending_dr
 
 
 def test_guard_keeps_a_persona_shape_and_a_floor_shape_without_shared_terms() -> None:
-    dana = [obs("o1", "e1", template="c1", terms=("revenue",), phrasing="x", persona="dana", delta=-0.4,
+    claire = [obs("o1", "e1", template="c1", terms=("revenue",), phrasing="x", persona="claire", delta=-0.4,
                 sig=Signature.ROUNDING),
-            obs("o2", "e2", template="c2", terms=("trades",), phrasing="y", persona="dana", delta=0.3,
+            obs("o2", "e2", template="c2", terms=("trades",), phrasing="y", persona="claire", delta=0.3,
                 sig=Signature.ROUNDING)]
-    assert len(coherence_guard(shape_of(dana), dana)) == 1
-    assert presentation_filter(shape_of(dana)) == {"template": {"$in": ["c1", "c2"]}, "persona": "dana"}
+    assert len(coherence_guard(shape_of(claire), claire)) == 1
+    assert presentation_filter(shape_of(claire)) == {"template": {"$in": ["c1", "c2"]}, "persona": "claire"}
     q3 = [obs(f"o{i}", f"e{i}", template=f"t{i}", terms=(t,), phrasing=f"p{i}", persona=p)
           for i, (t, p) in enumerate([("accounts", "omar"), ("account limit", "lee"), ("products", "kim")])]
     (shape,) = coherence_guard(shape_of(q3), q3)

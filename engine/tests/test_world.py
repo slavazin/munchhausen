@@ -52,7 +52,7 @@ class FakeStore:
 def test_pack_coverage_and_minimum_set() -> None:
     assert PACK.validate_coverage() == []
     kinds = {q.id: q.kind for q in PACK.quirks}
-    assert {"Q1_active_customer", "Q3_soft_delete", "Q5_revenue", "P1_dana_rounding", "N1_stale_report"} <= set(kinds)
+    assert {"Q1_active_customer", "Q3_soft_delete", "Q5_revenue", "P1_claire_rounding", "N1_stale_report"} <= set(kinds)
     assert len([t for t in PACK.templates if not any(t.id in q.templates and q.persona is None
                                                      for q in PACK.quirks)]) >= 4    # controls for the pilot
     assert PACK.drift_schedule["D1"]["quirk"] == "Q1_active_customer"
@@ -121,18 +121,18 @@ def test_stream_mix_honours_quirk_share() -> None:
     assert abs(share - S.quirk_share) < 0.04
     per_quirk = Counter(BANK.hidden(q.id).quirks[0] for q in qs if BANK.hidden(q.id).quirks)
     assert set(per_quirk) == {"Q1_active_customer", "Q3_soft_delete", "Q5_revenue", "Q6_tech_names",
-                              "P1_dana_rounding"}
+                              "P1_claire_rounding"}
     assert per_quirk["Q1_active_customer"] > 1.5 * per_quirk["Q5_revenue"]          # pack weight 2
 
 
-def test_one_quirk_per_question_and_dana_on_controls_only() -> None:
-    p1 = PACK.quirk("P1_dana_rounding")
+def test_one_quirk_per_question_and_claire_on_controls_only() -> None:
+    p1 = PACK.quirk("P1_claire_rounding")
     for i in range(1000):
         q = BANK.question_at(S.stream_seed, i)
         h = BANK.hidden(q.id)
         assert len(h.quirks) <= 1
-        if q.persona == "dana":
-            assert h.quirks == ("P1_dana_rounding",) and q.template in p1.templates
+        if q.persona == "claire":
+            assert h.quirks == ("P1_claire_rounding",) and q.template in p1.templates
             assert not BANK.template(q.template).quirks
         elif h.quirks:
             assert BANK.template(q.template).quirks == h.quirks
@@ -140,7 +140,7 @@ def test_one_quirk_per_question_and_dana_on_controls_only() -> None:
 
 def test_v_set_is_sealed_from_the_stream() -> None:
     """Sealed by what the proposer sees (the text) plus a preference persona: no V text recurs in the
-    stream except as a different (non-Dana) persona's identical question, which is excluded too."""
+    stream except as a different (non-Claire) persona's identical question, which is excluded too."""
     v = BANK.v_set(S.v_seed, S.v_size)
     assert len(v) == S.v_size and all(q.id.startswith("v") for q in v)
     pq = PACK.persona_quirks()
@@ -198,8 +198,8 @@ def _authority(data: dict, level: AuthorityLevel = AuthorityLevel.TERM, rate: fl
 
 
 async def test_authority_phrasing_per_level(world_data: dict) -> None:
-    q = BANK.pose("revenue_year", "priya", {"year": 2010})
-    ctl = BANK.pose("sell_trades_year", "priya", {"year": 2010})
+    q = BANK.pose("revenue_year", "anna", {"year": 2010})
+    ctl = BANK.pose("sell_trades_year", "anna", {"year": 2010})
     term = await _authority(world_data, rate=0.0).judge(q, -1.0, "v0", 3, with_authority=True)
     assert not term.correct and term.phrasing in PACK.quirk("Q5_revenue").authority_phrasings
     terse = await _authority(world_data, AuthorityLevel.TERSE, 0.0).judge(q, -1.0, "v0", 3, with_authority=True)
@@ -212,21 +212,21 @@ async def test_authority_phrasing_per_level(world_data: dict) -> None:
     assert hidden.figure is None and hidden.phrasing is None
 
 
-async def test_authority_scores_gold_and_dana_tolerance(world_data: dict) -> None:
+async def test_authority_scores_gold_and_claire_tolerance(world_data: dict) -> None:
     a = _authority(world_data, rate=0.0)
-    q = BANK.pose("avg_limit_product", "dana", {"product": "Commodity"})
+    q = BANK.pose("avg_limit_product", "claire", {"product": "Commodity"})
     g = await a._truth.gold(q, "v0")
     assert g % 1000 == 0
     assert (await a.judge(q, g + 0.4, "v0", 0, with_authority=False)).correct
     assert not (await a.judge(q, g + 1.0, "v0", 0, with_authority=False)).correct
-    plain = BANK.pose("avg_limit_product", "priya", {"product": "Commodity"})
+    plain = BANK.pose("avg_limit_product", "anna", {"product": "Commodity"})
     exact = await a._truth.gold(plain, "v0")
     assert (await a.judge(plain, exact, "v0", 0, with_authority=False)).correct
     assert a._abs_tol_for(plain) == 0.0 and a._abs_tol_for(q) == S.score_abs_tol_rounded
 
 
 async def test_poison_is_deterministic_per_seed_and_index(world_data: dict) -> None:
-    q = BANK.pose("revenue_year", "priya", {"year": 2010})
+    q = BANK.pose("revenue_year", "anna", {"year": 2010})
     a, b = _authority(world_data, rate=0.3), _authority(world_data, rate=0.3)
     gold = await a._truth.gold(q, "v0")
     poisoned = []
@@ -246,7 +246,7 @@ async def test_poison_is_deterministic_per_seed_and_index(world_data: dict) -> N
 
 async def test_d1_drift_is_gold_only(world_data: dict) -> None:
     a = _authority(world_data, rate=0.0)
-    q = BANK.pose("active_born_from", "priya", {"born_from": 1960})
+    q = BANK.pose("active_born_from", "anna", {"born_from": 1960})
     v0, v1 = await a._truth.gold(q, "v0"), await a._truth.gold(q, "v0+D1")
     st = Counter(c["st"] for c in world_data["customers"])
     assert (v0, v1) == (st[2] + st[7], st[2] + st[4] + st[7])
@@ -275,10 +275,10 @@ async def test_pack_world_builds_and_judges() -> None:
     assert {q["id"]: q["definition"] for q in inv["quirks"]}["Q1_active_customer"]
     assert inv["stream_identity"] == {"v_seed": S.v_seed, "v_size": S.v_size}
     assert len(inv["poison_variants"]) == len(PACK.poison_bank)
-    q5 = w.bank.pose("revenue_year", "priya", {"year": 2010})
+    q5 = w.bank.pose("revenue_year", "anna", {"year": 2010})
     ids = [w.poisoned(q5, i) for i in range(200)]
     assert ids == [w.poisoned(q5, i) for i in range(200)] and "N1#0:Q5_revenue" in ids
-    assert all(w.poisoned(w.bank.pose("sell_trades_year", "priya", {"year": 2010}), i) is None for i in range(200))
+    assert all(w.poisoned(w.bank.pose("sell_trades_year", "anna", {"year": 2010}), i) is None for i in range(200))
     assert w.instances("revenue_symbol", 0, 2)[0].template == "revenue_symbol"
 
 

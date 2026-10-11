@@ -174,10 +174,10 @@ def test_case_leak_without_heldout_fix_is_refused() -> None:
 def test_population_filter_is_the_hook_definition() -> None:
     from munchhausen.domain.latches import HookLatch, KeySet, NotThisRow
 
-    hook = HookLatch(fires_when=KeySet(terms=(TERM,), persona="dana"),
+    hook = HookLatch(fires_when=KeySet(terms=(TERM,), persona="claire"),
                      not_this=(NotThisRow(terms=("churn",), contrast="active customers by churn month"),))
     f = population_filter(hook, exclude_ids=["e1"], exclude_questions=["q1"], after_idx=10)
-    assert f["persona"] == "dana" and f["$nor"] == [{"terms": {"$all": ["churn"]}}] and f["idx"] == {"$gt": 10}
+    assert f["persona"] == "claire" and f["$nor"] == [{"terms": {"$all": ["churn"]}}] and f["idx"] == {"$gt": 10}
     assert f["confirmed_figure"] == {"$ne": None} and f["stream"] == "stream"
     assert population_filter(HookLatch(fires_when=KeySet()), exclude_ids=[], exclude_questions=[],
                              after_idx=None) == {"_id": {"$in": []}}

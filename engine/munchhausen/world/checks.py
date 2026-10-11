@@ -2,7 +2,7 @@
 
 - `isolation_violations`: for every template (controls included) and parameter combination, applying any
   other learnable quirk's gold transform leaves its gold unchanged, at every world version (SPEC § 4.2).
-  Preference quirks are scoped by persona, not population (Dana is drawn on controls only), and poison is
+  Preference quirks are scoped by persona, not population (Claire is drawn on controls only), and poison is
   the authority's, so neither is applied.
 - `quirk_effects`: per quirk template, the share of combinations whose gold differs from the poison
   variant's figure: a quirk whose figure equals the conventional one everywhere leaves no residual.
