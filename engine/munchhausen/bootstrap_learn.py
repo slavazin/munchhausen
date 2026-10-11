@@ -145,7 +145,7 @@ def direct_writer_for(h: Any, arm: str) -> DirectWriter:
             models=h.shared("models", s.models_impl), adjudicator=adjudicator_for(h, arm), decisions=h.store.decisions,
             observations=h.store.observations,
             representation=_representation(h, arm), merge=s.direct_merge, merge_cosine=s.naive_merge_cosine,
-            concurrency=s.workers_per_arm, trace=_trace(h))
+            concurrency=s.direct_concurrency, trace=_trace(h))
     return cache["direct_writer"]
 
 
@@ -250,9 +250,8 @@ def backward_for(h: Any, arm: str) -> RoundHook:
 
                 observed = await asyncio.gather(*(observe(e) for e in misses))
                 if spec.write_path is WritePath.DIRECT:
-                    writer = direct_writer_for(h, arm)
-                    for e, obs in zip(misses, observed, strict=True):
-                        await writer.write(e, obs, round_=round_, at_idx=hi)
+                    await direct_writer_for(h, arm).write_round(list(zip(misses, observed, strict=True)),
+                                                                round_=round_, at_idx=hi)
                 else:
                     deps["nominator"] = _collaborator(h, arm, "nominator", "munchhausen.learn.nominate",
                                                       "Nominator", deps)

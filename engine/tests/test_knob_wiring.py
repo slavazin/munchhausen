@@ -29,7 +29,8 @@ SENTINELS: dict[str, Any] = {
     "execute_max_time_ms": 3001, "backtest_seed": 18, "backtest_concurrency": 5, "backtest_recent": 301,
     "backtest_holdout_share": 0.3, "backtest_min_fixed": 3, "backtest_min_fixed_heldout": 2,
     "backtest_max_broken": 2, "backtest_min_n": 5, "retire_idle": 299, "retire_fires": 7, "direct_merge": False,
-    "naive_merge_cosine": 0.93, "workers_per_arm": 7, "lens_call_mode": "joint", "lens_phrasings": 2,
+    "naive_merge_cosine": 0.93, "workers_per_arm": 7, "direct_concurrency": 9, "lens_call_mode": "joint",
+    "lens_phrasings": 2,
     "lens_max_concurrency": 6, "lens_model": "jev-x", "lens_timeout_s": 21.0,
 }
 
@@ -53,7 +54,7 @@ TABLE: dict[tuple[str, str], str] = {
     ("lens_panel", "_timeout"): "lens_timeout_s",
     ("lifecycle", "retire_idle"): "retire_idle", ("lifecycle", "retire_fires"): "retire_fires",
     ("direct_writer", "merge"): "direct_merge", ("direct_writer", "merge_cosine"): "naive_merge_cosine",
-    ("direct_writer", "concurrency"): "workers_per_arm",
+    ("direct_writer", "concurrency"): "direct_concurrency",
     ("observer", "embed_mask"): "embed_mask",
     ("nominator", "neighbour_k"): "neighbour_k", ("nominator", "residual_window"): "nominator_residual_window",
     ("episodic", "round_size"): "round_size", ("episodic", "carry_rounds"): "carry_rounds",

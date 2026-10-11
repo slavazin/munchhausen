@@ -167,6 +167,7 @@ class Settings(BaseSettings):
     #                                     supersede reads from the predecessor's fire instead
     l2_route_contested: bool = False    # L2 also routes a `new` draft as supersede when exactly one contested
     #                                     neighbour shares a hook term (off: minimum configuration, § 3a)
+    direct_concurrency: int = 6         # naive/self_ref lesson calls in flight per round (admission stays serial)
     direct_merge: bool = True           # lessons merge into an admitted decision at NAIVE_MERGE_COSINE
     lesson_max_tokens: int = 2000
     self_grade_max_tokens: int = 2000

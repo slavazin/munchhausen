@@ -91,50 +91,76 @@ class DirectWriter:
     representation: Representation | None = None
     merge: bool = True
     merge_cosine: float = 0.92
-    concurrency: int = 4
+    concurrency: int = 6                  # DIRECT_CONCURRENCY: lesson / self-grade calls in flight
     trace: Trace | None = None
     failures: list[tuple[str, str, str]] = field(default_factory=list)   # (stage, episode id, error)
-    _sem: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
 
     async def write(self, episode: Episode, observations: Sequence[Observation], *, round_: int,
                     at_idx: int | None = None) -> list[str]:
-        """naive: one lesson per reducible open observation of the episode, admitted or merged."""
-        todo = [o for o in observations if o.cls is ObservationClass.REDUCIBLE
-                and o.disposition is ObservationDisposition.OPEN]
-        lessons = await asyncio.gather(*(self._bounded(self.models.lesson(episode, o)) for o in todo),
-                                       return_exceptions=True)
+        """naive, one episode: see `write_round`."""
+        return await self.write_round([(episode, observations)], round_=round_,
+                                      at_idx=at_idx if at_idx is not None else episode.idx)
+
+    async def write_round(self, items: Sequence[tuple[Episode, Sequence[Observation]]], *, round_: int,
+                          at_idx: int) -> list[str]:
+        """naive: one lesson per reducible open observation of the round, admitted or merged.
+
+        The model calls and each lesson's embedding run concurrently (≤ DIRECT_CONCURRENCY in flight). Entry,
+        curator, merge-or-admit and lifecycle then run one lesson at a time in the observations' order, so
+        each merge decision sees exactly the decisions the lessons before it admitted or merged: the outcome
+        equals the sequential one whatever order the calls finish in."""
+        todo = [(e, o) for e, obs in items for o in obs
+                if o.cls is ObservationClass.REDUCIBLE and o.disposition is ObservationDisposition.OPEN]
+        sem = asyncio.Semaphore(max(1, self.concurrency))
+        prepared = await asyncio.gather(*(self._prepare(sem, lambda e=e, o=o: self.models.lesson(e, o))
+                                          for e, o in todo), return_exceptions=True)
         out = []
-        for o, lesson in zip(todo, lessons, strict=True):
-            if isinstance(lesson, BaseException):   # loud and recorded; the observation stays open for a re-run
-                self._failed("lesson", episode, lesson, observation_id=o.id)
+        for (episode, o), got in zip(todo, prepared, strict=True):
+            if isinstance(got, BaseException):   # loud and recorded; the observation stays open for a re-run
+                self._failed("lesson", episode, got, observation_id=o.id)
                 continue
+            lesson, vec = got
             d = lesson_draft(lesson, run_id=episode.run_id, arm=episode.arm, round_=round_, episode=episode,
                              key=o.id, observation_ids=(o.id,))
-            out.append(await self._admit(d, (o,), at_idx if at_idx is not None else episode.idx))
+            out.append(await self._admit(d, (o,), at_idx, vec=vec))
             if self.observations is not None:   # this path owns its sources: admitted, merged or refused
                 await self.observations.dispose((o.id,), ObservationDisposition.SPENT, by=d.id)
         return out
 
     async def grade(self, episodes: Sequence[Episode], *, round_: int, at_idx: int) -> list[str]:
-        """self_ref: every episode of the round is self-graded blind; a self-judged miss writes a lesson."""
-        grades = await asyncio.gather(*(self._bounded(self.models.self_grade(e)) for e in episodes),
-                                      return_exceptions=True)
+        """self_ref: every episode of the round is self-graded blind; a self-judged miss writes a lesson.
+        Grades (and their lessons' embeddings) run concurrently; admission is sequential, in episode order."""
+        sem = asyncio.Semaphore(max(1, self.concurrency))
+        grades = await asyncio.gather(*(self._prepare(sem, lambda e=e: self.models.self_grade(e), graded=True)
+                                        for e in episodes), return_exceptions=True)
         out = []
-        for e, g in zip(episodes, grades, strict=True):
-            if isinstance(g, BaseException):
-                self._failed("self_grade", e, g)
+        for e, got in zip(episodes, grades, strict=True):
+            if isinstance(got, BaseException):
+                self._failed("self_grade", e, got)
                 continue
+            g, vec = got
             self._event("self_grade", {"episode_id": e.id, "arm": e.arm, "self_correct": g.correct,
                                        "lesson": g.lesson is not None})
             if g.correct or g.lesson is None:
                 continue
             d = lesson_draft(g.lesson, run_id=e.run_id, arm=e.arm, round_=round_, episode=e, key=e.id,
                              observation_ids=())
-            out.append(await self._admit(d, (), at_idx))
+            out.append(await self._admit(d, (), at_idx, vec=vec))
         return out
 
-    async def _admit(self, draft: Draft, sources: Sequence[Observation], at_idx: int) -> str:
-        target, score = await self._merge_target(draft) if self.merge else (None, None)
+    async def _prepare(self, sem: asyncio.Semaphore, call: Any, *, graded: bool = False) -> tuple[Any, Any]:
+        """One model call and its lesson's embedding, inside the semaphore (the parallel half)."""
+        async with sem:
+            got = await call()
+            lesson = (got.lesson if not got.correct else None) if graded else got
+            vec = None
+            if lesson is not None and self.merge and self.representation is not None:
+                vecs = await self.representation.embed([f"{lesson.title}\n{lesson.payload}"], "decision")
+                vec = vecs[0] if vecs is not None and len(vecs) else None
+            return got, vec
+
+    async def _admit(self, draft: Draft, sources: Sequence[Observation], at_idx: int, vec: Any = None) -> str:
+        target, score = await self._merge_target(draft, vec) if self.merge else (None, None)
         if target is not None:
             draft = merged_draft(draft, target)
             self._event("direct.merge", {"draft_id": draft.id, "into": target.id, "cosine": score})
@@ -143,12 +169,15 @@ class DirectWriter:
         outcomes = await self.adjudicator.adjudicate(draft, ctx)
         return f"{draft.id}:{outcomes[-1].verdict.value if outcomes else 'none'}"
 
-    async def _merge_target(self, draft: Draft) -> tuple[Decision | None, float | None]:
+    async def _merge_target(self, draft: Draft, vec: Any = None) -> tuple[Decision | None, float | None]:
         if self.representation is None:
             return None, None
-        vecs = await self.representation.embed([decision_text(draft)], "decision")
-        if vecs is None or len(vecs) == 0:
-            return None, None
+        if vec is None:
+            vecs = await self.representation.embed([decision_text(draft)], "decision")
+            if vecs is None or len(vecs) == 0:
+                return None, None
+            vec = vecs[0]
+        vecs = [vec]
         k = emb_key(self.representation.id)
         best: tuple[Decision | None, float | None] = (None, None)
         for d in await self.decisions.admitted(draft.run_id, draft.arm):
@@ -159,12 +188,6 @@ class DirectWriter:
         if best[1] is None or best[1] < self.merge_cosine:
             return None, best[1]
         return best
-
-    async def _bounded(self, coro: Any) -> Any:
-        if self._sem is None:
-            self._sem = asyncio.Semaphore(max(1, self.concurrency))
-        async with self._sem:
-            return await coro
 
     def _failed(self, stage: str, e: Episode, exc: BaseException, **extra: Any) -> None:
         self.failures.append((stage, e.id, f"{type(exc).__name__}: {exc}"))
