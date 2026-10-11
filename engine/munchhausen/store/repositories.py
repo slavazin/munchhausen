@@ -311,15 +311,20 @@ class AtlasTerms:
             self._search_ok = await self._search_ready()
         if self._search_ok:
             try:
-                pipeline: Pipeline = [
-                    {"$search": {"index": "terms_search",
-                                 "text": {"query": text, "path": ["term", "aliases"], "synonyms": "term_synonyms"}}},
-                    {"$limit": self._search_limit},
-                ]
+                query: dict[str, Any] = {"query": text, "path": ["term", "aliases"]}
+                if self._synonyms_ok is None:
+                    syn = self._c.database[C.TERM_SYNONYMS.value]
+                    self._synonyms_ok = await syn.count_documents({}, limit=1) > 0
+                if self._synonyms_ok:      # a synonyms mapping over an empty collection matches nothing, silently
+                    query["synonyms"] = "term_synonyms"
+                pipeline: Pipeline = [{"$search": {"index": "terms_search", "text": query}},
+                                      {"$limit": self._search_limit}]
                 rows = [Term.model_validate(d) async for d in await self._c.aggregate(pipeline)]
                 self._search_ok = True
             except OperationFailure:          # index absent, not READY, or synonyms not compiled yet
                 self._search_ok, rows = False, None
+        if not rows:                       # no candidates is never trusted: the in-process rule decides
+            rows = None
         if rows is None:
             rows = await self.all(run_id=run_id)
         elif run_id is not None:
@@ -329,6 +334,7 @@ class AtlasTerms:
     # --- S2 (M2) additions ------------------------------------------------------------------------------
 
     _search_ok: bool | None = None            # None: untried; False: fall back for this process
+    _synonyms_ok: bool | None = None          # None: unread; the mapping is sent only when it holds rows
     _search_limit: int = 100                  # AtlasStore sets TERMS_SEARCH_LIMIT
 
     def configure_search(self, *, limit: int) -> None:
