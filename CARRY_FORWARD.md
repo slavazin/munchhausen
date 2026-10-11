@@ -54,12 +54,49 @@ Binding decisions 14–22 (don't relitigate):
 21. **naive/self_ref lesson calls run concurrently** (`DIRECT_CONCURRENCY`), applied in observation order.
 22. **Raindrop** is a write-only `Trace` (`TRACE_IMPL=jsonl,raindrop` tee); never read on the learning path.
 
+### 00b. Status at 15:25 (pre-compaction handoff for the orchestrator)
+
+**Run A** — frozen, ungated, governed DONE (each 20 rounds, 0 failed, 0 V holes). naive+self_ref (one process,
+`munch-run-a2`, log `var/runs/run-a.direct.log`) still running at handoff. `RAINDROP` quota ran out mid-run: sends
+dropped silently, runs unaffected (write-only trace); local `var/runs/run-a/events.jsonl` is complete.
+governed story (all from records):
+- Q1 `st∈{2,7}` @60 (backtest 6 fixed/4 held-out/0 broken); Q6 eight-symbol set @90 (5/5/0); Q5 ×0.995 @240 (5/4/0).
+- D1 @300 → dispositive fire @307 (genuine undercounts 137 vs 191, 614 vs 856) → wrong successors REFUSED @360
+  (broke 4), @390 (broke 2), @420 (no held-out) → successor `st∈{2,4,7}` admitted @450 (5/2/0), predecessor
+  superseded. Drift-to-supersede latency 150.
+- Floor `rs 3 excluded` admitted @540 (6/5/0), tool_access rewired → governed floor beat landed.
+- Q1 accuracy by window (0–149, 150–299, 300–374, 375–449, 450–524, 525–599): governed 13/30, 32/32, 0/14, 0/14,
+  10/19, 12/18; ungated 12/30, 28/32, 0/14, 8/14, 17/19, 15/18; frozen/self_ref/naive 0 throughout.
+- Ad-hoc paired (not pre-registered), quirk-bearing, minus frozen, idx 150–299: governed +0.60 [0.52,0.68] n=95,
+  ungated +0.56, naive +0.20, self_ref 0.00. Official readings come from `report`.
+**Weakness found (report it, do NOT fix mid-run):** revisit guard fires on small consistent residuals that are not
+drift: ungated fired @141 (pre-D1) on its correct Q1 decision from claire-rounded residuals and superseded it;
+ungated @535 and governed @467 (open) fired on off-by-one/one-rounding-step residuals. Post-event fix: tighten
+attribution for persona/rounding phrasing and boundary residuals. Add to LESSONS + deck residue slide.
+
+**Run B** (adversarial authority) RUNNING since 15:17: `RUN_ID=run-b`, snapshot `60086e4` (`munch-run-b`),
+`AUTHORITY_POISON_RATE=0.20`, `CONF_DIR=<munch-run-b>/engine/conf/run-b` (forecasts F1–F7 registered; F2 = governed
+admits 0 N1-derived, naive and ungated ≥1; F7 = governed − ungated on controls after round 10), arms frozen, naive,
+ungated, governed, `TRACE_IMPL=jsonl`, other knobs as Run A learning arms. Log `var/runs/run-b.log`. ETA ~15:55–16:05.
+Launcher script: scratchpad `launch_run_b.sh` (already fired).
+
+**Deck:** https://claude.ai/artifact/9spap78fYyEfE9GfuZ6jo5 (Slides type, private; user must share). 18 slides,
+rehearsal placeholders with badges on slides 7, 8, 9, 11. To fill: 7 `[curve]` → Q1 step chart above (governed,
+ungated, frozen, D1 marked, fire @307, successor @450); 10 injection screenshot + `[fixed/broken]`; 11 governed
+floor @540; 12 `why active_customer` screenshot; 13 F1–F7 readings (show REGISTERED forecast beside reading — slide
+currently says "F6 expected below": replace with the registered claim); 17 test/commit counts (442 tests);
+18 repo link. Add Run B slide (poison 0.20) if it reads. Revise the deck by its url (read deck.json first).
+
+**Git:** local `m0-scaffold` HEAD ≥ `60086e4`. `origin/m0-scaffold` DELETED at user's request; origin has only `main`.
+Do not push anything until the history rewrite (step 6 below). User asked to hold private info.
+
 **Post-run checklist (in order):**
 1. When every arm ends: re-close `rounds` for `run-a` with HEAD code (arms wrote round records with different
    snapshots of `round_pipeline`; `$merge` is idempotent) — loop `evidence.close_round` over each arm's rounds.
-2. `PLANTED_MAP_CONCURRENCY=16 uv run munchhausen planted-map run-a` (Opus judge; resumes; ~$10).
+2. `PLANTED_MAP_CONCURRENCY=16 uv run munchhausen planted-map run-a` (Opus judge; resumes; ~$10); same for run-b
+   after it ends.
 3. `uv run munchhausen report run-a --against rehearsal-1` → `var/reports/run-a/`; read every forecast beside
-   its reading. F6 likely reads below (ungated admits everything) — state it as the cost of the gate.
+   its reading; state disagreements as they stand. Then `report run-b --against run-a`.
 4. Demo beats: viewer `munchhausen viewer --run run-a` (injection beat on governed, `why active_customer`,
    floor beat if governed admitted a floor; else ungated's).
 5. Export evidence into a tracked `docs/evidence/` (report.md/html, readings.json, manifest.json).
