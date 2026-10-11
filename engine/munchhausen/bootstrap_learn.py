@@ -19,7 +19,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from munchhausen.agent.consultation import Consulter, consulter_for
+from munchhausen.agent.consultation import Consulter
 from munchhausen.agent.proposer import Proposer
 from munchhausen.domain.arm import ArmSpec, WritePath
 from munchhausen.domain.episode import Episode
@@ -29,6 +29,7 @@ from munchhausen.learn.backtest import Backtester
 from munchhausen.learn.direct import DirectWriter, blind
 from munchhausen.learn.layers import L0Shape, L1Bar, L2Neighbours, L3Lenses, L4Backtest, LessonShape
 from munchhausen.learn.lifecycle import LifecycleService
+from munchhausen.loop.episode import failed
 from munchhausen.loop.runner import RoundHook
 from munchhausen.ports import registry
 from munchhausen.store.names import view_name
@@ -71,16 +72,9 @@ class _LazyConsulter:
 
 
 def consulter(h: Any, arm: str) -> Consulter:
-    """The arm's consulter: the one the forward pass cached under `h.ports[arm]["consulter"]`, else built
-    from `consulter_for(ArmSpec.consultation, **deps)`."""
-    cache = _cache(h, arm)
-    if "consulter" not in cache:
-        s, store, spec = h.settings, h.store, h.arms[arm]
-        cache["consulter"] = consulter_for(
-            spec.consultation, decisions=store.decisions, terms=store.terms, reranker=h.port(arm, "reranker"),
-            budget_tokens=s.context_budget_tokens, top_k=s.naive_top_k, representation=h.port(arm, "representation"),
-            similarity=h.port(arm, "similarity"), settings=s, store=store)
-    return cache["consulter"]
+    """The arm's consulter: the forward pass's own (`Harness.consulter`, cached under
+    `h.ports[arm]["consulter"]`), so replays consult exactly as episodes do."""
+    return h.consulter(arm)
 
 
 def lifecycle_for(h: Any, arm: str) -> LifecycleService:
@@ -206,6 +200,7 @@ async def round_episodes(h: Any, arm: str, lo: int, hi: int) -> list[Episode]:
     docs = await h.store.episodes.for_learner(h.settings.run_id, arm, with_authority=spec.authority,
                                               filter={"stream": "stream", "idx": {"$gte": lo, "$lte": hi}})
     rows = [Episode.model_validate(d) if spec.authority else blind(d) for d in docs]
+    rows = [e for e in rows if not failed(e)]   # S2: failed-episode records keep pairing, never feed learning
     return sorted(rows, key=lambda e: e.idx)
 
 

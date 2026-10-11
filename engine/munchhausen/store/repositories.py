@@ -20,7 +20,16 @@ from munchhausen.domain.episode import EVALUATION_ONLY_FIELDS, Episode
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
-from munchhausen.domain.registers import Cursor, PlantedMapping, RoundRecord, RunRecord, SpendRow, Term, ToolAccess
+from munchhausen.domain.registers import (
+    Cursor,
+    PlantedMapping,
+    RoundRecord,
+    RunRecord,
+    SpendRow,
+    Term,
+    ToolAccess,
+    term_run_key,
+)
 from munchhausen.store.codec import from_doc, to_doc
 from munchhausen.store.names import C
 
@@ -145,6 +154,18 @@ class AtlasFires(_Ledger[Fire]):
         cur = self._c.find({"decision_id": decision_id, "disposition": FireDisposition.OPEN.value})
         return [Fire.model_validate(d) async for d in cur]
 
+    async def put_new(self, fire: Fire) -> bool:
+        """S2: insert-if-absent by the deterministic id (`_id` is unique, so concurrent writers race safely)."""
+        try:
+            await self._c.insert_one(to_doc(fire))
+            return True
+        except DuplicateKeyError:
+            return False
+
+    async def disposed_count(self, decision_id: str, latch: str) -> int:
+        return await self._c.count_documents({"decision_id": decision_id, "latch": latch,
+                                              "disposition": {"$ne": FireDisposition.OPEN.value}})
+
     async def dispose(self, fire_ids: Sequence[str], disposition: FireDisposition, disposer: Disposer) -> None:
         await self._c.update_many({"_id": {"$in": list(fire_ids)}},
                                   {"$set": {"disposition": disposition.value, "disposer": disposer.value}})
@@ -216,8 +237,11 @@ class AtlasLeases:
         except DuplicateKeyError:
             return False
 
-    async def release(self, run_id: str, arm: str, idx: int) -> None:
-        await self._c.delete_one({"run_id": run_id, "arm": arm, "idx": idx})
+    async def release(self, run_id: str, arm: str, idx: int, *, worker: str | None = None) -> None:
+        q: Doc = {"run_id": run_id, "arm": arm, "idx": idx}
+        if worker is not None:
+            q["worker"] = worker
+        await self._c.delete_one(q)
 
     async def orphaned(self, run_id: str, arm: str, below_idx: int) -> list[int]:
         done = set(await self._episodes.distinct("idx", {"run_id": run_id, "arm": arm, "idx": {"$lt": below_idx}}))
@@ -249,13 +273,20 @@ class AtlasTerms:
     def __init__(self, coll: AsyncCollection[Doc]) -> None:
         self._c = coll
 
-    async def all(self) -> list[Term]:
-        return [Term.model_validate(d) async for d in self._c.find({})]
+    async def all(self, *, run_id: str | None = None) -> list[Term]:
+        q: Doc = {} if run_id is None else {f"runs.{term_run_key(run_id)}": {"$exists": True}}
+        return [Term.model_validate(d) async for d in self._c.find(q)]
 
     async def add(self, term: Term) -> None:
-        await self._c.update_one({"term": term.term}, {"$setOnInsert": to_doc(term)}, upsert=True)
+        """One row per term (the `terms.term` index is unique); runs are a membership map on the row, each
+        with its own `admitted_at_idx` (the earliest wins)."""
+        doc = {k: v for k, v in to_doc(term).items() if k != "runs"}
+        update: Doc = {"$setOnInsert": doc}
+        if term.run_id is not None:
+            update["$min"] = {f"runs.{term_run_key(term.run_id)}": term.admitted_at_idx}
+        await self._c.update_one({"term": term.term}, update, upsert=True)
 
-    async def extract(self, text: str) -> frozenset[str]:
+    async def extract(self, text: str, *, run_id: str | None = None) -> frozenset[str]:
         """`$search` over `terms_search` (with the `term_synonyms` mapping) for candidate rows, then the one
         definition of presence (`agent.terms.present_terms`) over them. When the index is absent or not READY,
         the same definition runs over every row (the in-process fallback, SPEC § 20.3)."""
@@ -276,7 +307,9 @@ class AtlasTerms:
             except OperationFailure:          # index absent, not READY, or synonyms not compiled yet
                 self._search_ok, rows = False, None
         if rows is None:
-            rows = await self.all()
+            rows = await self.all(run_id=run_id)
+        elif run_id is not None:
+            rows = [r for r in rows if term_run_key(run_id) in r.runs]
         return present_terms(text, rows)
 
     # --- S2 (M2) additions ------------------------------------------------------------------------------

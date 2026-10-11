@@ -54,7 +54,7 @@ async def seed_vocab(h: Harness) -> dict[str, Any]:
     s, world = h.settings, await h.ready_world()
     questions = list(islice(world.questions(s.stream_seed), s.vocab_warmup))
     rows = seed_terms(world.schema_summary(), questions, min_questions=s.vocab_min_questions,
-                      max_tokens=s.vocab_max_phrase_tokens)
+                      max_tokens=s.vocab_max_phrase_tokens, run_id=s.run_id)
     for t in rows:
         await h.store.terms.add(t)
     synonyms = await h.store.terms.compile_synonyms()
@@ -86,11 +86,15 @@ def register(app: typer.Typer) -> None:
 
     @app.command("episode")
     def episode_cmd(arm: str = typer.Option("frozen", "--arm"), idx: int = typer.Option(0, "--idx")) -> None:
-        """Run one stream question through the forward pass and print the episode (debug; writes it)."""
+        """Run one stream question through the forward pass and print the episode. Debug: it writes under
+        the run id `debug-<RUN_ID>`, never into a run's own records."""
         logging.basicConfig(level=logging.INFO)
 
         async def go() -> None:
-            h = harness()
+            from munchhausen.config import settings
+
+            base = settings()
+            h = harness(base.model_copy(update={"run_id": f"{base.debug_run_prefix}{base.run_id}"}))
             try:
                 world = await h.ready_world()
                 question = next(islice(world.questions(h.settings.stream_seed), idx, None))

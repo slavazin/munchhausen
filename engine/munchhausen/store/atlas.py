@@ -84,8 +84,10 @@ class GuardedReader(AtlasReader):
     async def find(self, collection: str, filter: Doc | None = None, projection: Doc | None = None,
                    limit: int = 0) -> list[Doc]:
         guard.check_filter(filter)
+        guard.check_filter(projection)        # projections take expressions too ($function in $project)
         lim = self._row_cap + 1 if limit <= 0 else min(limit, self._row_cap + 1)
-        rows = await super().find(collection, filter, projection, limit=lim)
+        rows = await self._db[collection].find(filter or {}, projection, limit=lim,
+                                               max_time_ms=self._max_time_ms).to_list()
         guard.check_rows(len(rows), self._row_cap)
         return rows
 
@@ -134,6 +136,11 @@ class AtlasStore:
         for name, repo in repositories(db, settings.lease_ttl_s, settings.seed_lens_weights()).items():
             setattr(self, name, repo)
         self.terms.configure_search(limit=settings.terms_search_limit)
+
+    def world_evaluation(self) -> AtlasReader:
+        """S2: `world` for the evaluation side (gold, the authority): their reads are pack code, not
+        model-written input, so they skip the sandbox and its row cap. Composition root only."""
+        return AtlasReader(self.clients.world_db(write=False))
 
     def world(self) -> AtlasReader:
         """`world` as the executor role, behind the runtime sandbox (S2: `GuardedReader`)."""

@@ -99,6 +99,13 @@ class Term(Value):
     source: Literal["schema", "question", "authority", "nominator"]
     admitted_at_idx: int
     decision_id: str | None = None
+    run_id: str | None = None                 # S2: the run this row is written for (seeding is per run)
+    runs: dict[str, int] = Field(default_factory=dict)   # run key → admitted_at_idx in that run (`term_run_key`)
+
+
+def term_run_key(run_id: str) -> str:
+    """A run id as a field-safe key of `Term.runs` (Atlas paths treat '.' as nesting and '$' as an operator)."""
+    return run_id.replace(".", "_").replace("$", "_")
 
 
 class SpendRow(Value):

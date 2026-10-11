@@ -71,13 +71,16 @@ def present_terms(text: str, rows: Iterable[Term]) -> frozenset[str]:
 
 def schema_terms(schema: SchemaSummary) -> list[str]:
     """Collection names and every segment of the dotted field paths as lower-case phrases
-    (`tier_and_details.$key.tier` → "tier and details", "tier"). Map-key placeholders (`$key`) and
-    underscore-led names (`_id`) are skipped. Names only: the types never enter the vocabulary."""
+    (`transactions.total` → "transactions", "total"). A path through a map-key placeholder (`$key`, a
+    hex-keyed map) is dropped whole: its inner names describe one map entry's shape, not how a question
+    presents. Underscore-led names (`_id`) are skipped. Names only: the types never enter the vocabulary."""
     out: list[str] = []
     for coll, fields in schema.collections.items():
         out.append(_phrase(coll))
         for path in fields:
-            out += [_phrase(seg) for seg in path.split(".") if seg and not seg.startswith(("_", "$"))]
+            if "$" in path:
+                continue
+            out += [_phrase(seg) for seg in path.split(".") if seg and not seg.startswith("_")]
     return [t for t in dict.fromkeys(out) if t and len(t) > 1]
 
 
@@ -100,17 +103,22 @@ def noun_phrases(text: str, max_tokens: int) -> set[str]:
 
 
 def seed_terms(schema: SchemaSummary, questions: Sequence[Question], *, min_questions: int,
-               max_tokens: int) -> list[Term]:
-    """The seed vocabulary: schema terms at index 0, then each noun phrase presented by ≥ `min_questions`
-    of the warmup questions, admitted at the index of the question where it reached that count."""
-    rows = {t: Term(term=t, source="schema", admitted_at_idx=0) for t in schema_terms(schema)}
+               max_tokens: int, run_id: str | None = None) -> list[Term]:
+    """The seed vocabulary of one run: schema terms at index 0, then each noun phrase presented by
+    ≥ `min_questions` of the warmup questions, admitted at the index of the question where it reached that count.
+
+    Lookahead, accepted and named: `extract` filters by run, not by index (the consultation knows no index),
+    so an episode before `VOCAB_WARMUP` may present a term first mined from a later warmup question. The
+    warmup is a fixed prefix of the stream text, identical for every arm (paired), and carries no figure,
+    outcome or authority phrasing; the lookahead is presentation only."""
+    rows = {t: Term(term=t, source="schema", admitted_at_idx=0, run_id=run_id) for t in schema_terms(schema)}
     seen: dict[str, int] = {}
     for idx, q in enumerate(questions):
         for p in noun_phrases(q.text, max_tokens):
             key = " ".join(tokens(p))
             seen[key] = seen.get(key, 0) + 1
             if seen[key] == min_questions and not any(" ".join(tokens(t)) == key for t in rows):
-                rows[p] = Term(term=p, source="question", admitted_at_idx=idx)
+                rows[p] = Term(term=p, source="question", admitted_at_idx=idx, run_id=run_id)
     return list(rows.values())
 
 

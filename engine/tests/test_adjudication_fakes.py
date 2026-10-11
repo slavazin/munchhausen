@@ -298,8 +298,8 @@ class FakeWorld:
     async def find(self, *a: Any, **k: Any) -> list[dict]:
         return []
 
-    async def collection_names(self) -> list[str]:
-        return sorted(self.st.views)
+    async def collection_names(self) -> list[str]:   # S2: the base collections too (the floor guard checks them)
+        return sorted({"customers", "accounts", "transactions", *self.st.views})
 
     async def create_view(self, name: str, source: str, pipeline: list[dict[str, Any]]) -> None:
         self.st.views[name] = (source, pipeline)

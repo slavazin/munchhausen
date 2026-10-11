@@ -9,6 +9,7 @@ from typing import Any
 
 from munchhausen.domain.common import Answer
 from munchhausen.domain.episode import Proposal
+from munchhausen.domain.pipeline_guard import rewrite_targets
 from munchhausen.ports.store import DocumentReader
 
 
@@ -26,8 +27,9 @@ class Execution:
 async def execute(proposal: Proposal, view_map: dict[str, str], world: DocumentReader, *,
                   max_time_ms: int) -> Execution:
     target = view_map.get(proposal.collection, proposal.collection)
+    pipeline = rewrite_targets(proposal.pipeline, view_map)   # floors bind cross-collection reads too
     try:
-        rows = await world.aggregate(target, proposal.pipeline, max_time_ms=max_time_ms)
+        rows = await world.aggregate(target, pipeline, max_time_ms=max_time_ms)
     except Exception as e:   # driver errors are data here: they classify the miss as irreducible
         raise ExecutionError(f"{type(e).__name__}: {e}") from e
     return Execution(answer=read_path(rows, proposal.answer_path), resolved=target, rows=len(rows))

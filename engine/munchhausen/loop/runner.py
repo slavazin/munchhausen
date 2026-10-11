@@ -28,8 +28,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from itertools import islice
 
+from munchhausen.domain.ids import episode_id
 from munchhausen.domain.question import Question
-from munchhausen.loop.episode import STREAM, ForwardPass, V
+from munchhausen.loop.episode import STREAM, ForwardPass, V, failed
 from munchhausen.ports.store import Store
 from munchhausen.ports.world import World
 
@@ -80,7 +81,8 @@ class ArmRunner:
         limit = min(length or self.run_length, self.run_length)
         questions = list(islice(self.world.questions(self.stream_seed), limit)) if self.stream else []
         cursor = await self.store.cursors.get(self.run_id, self.arm)
-        stats = {"rounds_closed": 0, "episodes": 0, "reissued": 0, "v_episodes": 0, "start_round": cursor.round}
+        stats = {"rounds_closed": 0, "episodes": 0, "reissued": 0, "v_episodes": 0, "start_round": cursor.round,
+                 "failed": 0, "v_holes": 0}
         n_rounds = -(-limit // self.round_size)
         for r in range(cursor.round, n_rounds):
             lo, hi = r * self.round_size, min((r + 1) * self.round_size, limit)
@@ -97,8 +99,7 @@ class ArmRunner:
 
     async def _stream_round(self, lo: int, hi: int, questions: Sequence[Question], stats: dict[str, int]) -> None:
         cursor = await self.store.cursors.get(self.run_id, self.arm)
-        orphans = [i for i in range(lo, min(cursor.next_idx, hi))
-                   if not await self.store.episodes.exists(self.run_id, self.arm, i)]
+        orphans = [i for i in range(lo, min(cursor.next_idx, hi)) if not await self._done(i, questions[i])]
         if orphans:
             log.warning("[%s] re-issuing %d orphaned indices: %s", self.arm, len(orphans), orphans)
             stats["reissued"] += len(orphans)
@@ -116,6 +117,8 @@ class ArmRunner:
                     idx = claimed
                 if await self._episode(idx, questions[idx], wid):
                     stats["episodes"] += 1
+                elif not await self._done(idx, questions[idx]):
+                    stats["failed"] += 1
 
         await asyncio.gather(*(worker(k) for k in range(self.workers)))
         missing = [i for i in range(lo, hi) if not await self.store.episodes.exists(self.run_id, self.arm, i)]
@@ -128,19 +131,34 @@ class ArmRunner:
                       self.lease_wait_s)
             return False
         try:
-            if await self.store.episodes.exists(self.run_id, self.arm, idx):   # finished before a kill
+            if await self._done(idx, question):   # finished before a kill
                 return False
-            for attempt in range(1, self.attempts + 1):
-                try:
-                    await self.forward.run(idx, question)
-                    return True
-                except Exception as e:
-                    log.exception("[%s] idx %d attempt %d failed: %s", self.arm, idx, attempt, e)
-                    self.forward.trace.event("episode_failed", {"arm": self.arm, "idx": idx, "attempt": attempt,
-                                                                "error": f"{type(e).__name__}: {e}"})
-            return False
+            return await self._attempts(idx, question)
         finally:
-            await self.store.leases.release(self.run_id, self.arm, idx)
+            await self.store.leases.release(self.run_id, self.arm, idx, worker=worker)
+
+    async def _attempts(self, idx: int, question: Question, *, stream: str = STREAM, at_idx: int | None = None) -> bool:
+        """`attempts` forward passes; after the last failure the index gets a failed-episode record, so it stays
+        paired and the round closes (a resume retries it while its round is open)."""
+        error = ""
+        for attempt in range(1, self.attempts + 1):
+            try:
+                await self.forward.run(idx, question, stream=stream, at_idx=at_idx)
+                return True
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                log.exception("[%s] %s idx %d attempt %d failed: %s", self.arm, stream, idx, attempt, e)
+                self.forward.trace.event("episode_failed", {"arm": self.arm, "idx": idx, "stream": stream,
+                                                            "attempt": attempt, "error": error})
+        await self.forward.record_failure(idx, question, error, stream=stream, at_idx=at_idx)
+        return False
+
+    async def _done(self, idx: int, question: Question, *, stream: str = STREAM, at_idx: int | None = None) -> bool:
+        """An episode exists for the index and is not a failed-episode record."""
+        eid = episode_id(self.run_id, self.arm, idx if at_idx is None else at_idx, stream=stream,
+                         question_id=question.id)
+        e = await self.store.episodes.get(eid)
+        return e is not None and not failed(e)
 
     async def _lease(self, idx: int, worker: str) -> bool:
         deadline = time.monotonic() + self.lease_wait_s
@@ -162,21 +180,26 @@ class ArmRunner:
         v_set = list(self.world.v_set())
         gate = asyncio.Semaphore(self.workers)
 
-        async def one(point: int, j: int, q: Question) -> None:
+        async def one(point: int, j: int, q: Question) -> int:
+            """1 when this V question is a hole (a failed-episode record), else 0."""
             vidx = v_index(point, j, self.v_offset, self.v_every, len(v_set))
             async with gate:
-                if await self.store.episodes.exists(self.run_id, self.arm, vidx):
-                    return
-                for attempt in range(1, self.attempts + 1):
-                    try:
-                        await self.forward.run(vidx, q, stream=V, at_idx=point)
-                        stats["v_episodes"] += 1
-                        return
-                    except Exception as e:
-                        log.exception("[%s] V %d/%d attempt %d failed: %s", self.arm, point, j, attempt, e)
+                if await self._done(vidx, q, stream=V, at_idx=point):
+                    return 0
+                if await self._attempts(vidx, q, stream=V, at_idx=point):
+                    stats["v_episodes"] += 1
+                    return 0
+                return 1
 
         for point in points:
-            await asyncio.gather(*(one(point, j, q) for j, q in enumerate(v_set)))
+            holes = sum(await asyncio.gather(*(one(point, j, q) for j, q in enumerate(v_set))))
+            if holes:
+                # a V hole is recorded, never silent; a resume retries it while its round is still open (a closed
+                # round's V point is not re-run: the store it was scored under has moved on)
+                stats["v_holes"] += holes
+                log.error("[%s] V point %d: %d of %d questions failed", self.arm, point, holes, len(v_set))
+                self.forward.trace.event("round.v_holes", {"arm": self.arm, "v_point": point, "holes": holes,
+                                                           "v_size": len(v_set)})
 
 
 __all__ = ["STREAM", "V", "ArmRunner", "RoundHook", "RoundIncomplete", "v_index", "v_points"]

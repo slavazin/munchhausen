@@ -71,7 +71,7 @@ class Harness:
 
             truth_db = open_truth(self.settings, self.store.clients)  # type: ignore[attr-defined]
             self.ports["_run"]["world"] = registry.resolve("world", self.settings.world_impl).create(
-                self.settings.world_impl, self.settings, self.store, truth_db=truth_db)
+                self.settings.world_impl, self.settings, _EvaluationStore(self.store), truth_db=truth_db)
         return self.ports["_run"]["world"]
 
     # --- S2 (M2): the forward pass and the arm runner ---------------------------------------------------
@@ -92,6 +92,14 @@ class Harness:
         return self.shared("models", self.settings.models_impl)
 
     def consulter(self, arm: str) -> Any:
+        """The arm's consulter, one per arm (cached under `ports[arm]["consulter"]`): the forward pass and
+        the backtest's replays consult through the same instance."""
+        cache = self.ports.setdefault(arm, {})
+        if "consulter" not in cache:
+            cache["consulter"] = self._build_consulter(arm)
+        return cache["consulter"]
+
+    def _build_consulter(self, arm: str) -> Any:
         from munchhausen.agent.consultation import consulter_for
 
         s, spec = self.settings, self.arms[arm]
@@ -150,6 +158,22 @@ class Harness:
 
     async def close(self) -> None:
         await self.store.close()
+
+
+class _EvaluationStore:
+    """The Store as the World implementation sees it: `world()` is the evaluation-side read (unguarded, no row
+    cap) when the store offers one, so gold's whole-collection reads never meet the sandbox meant for
+    model-written pipelines. Every other attribute is the store's own."""
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    def world(self) -> Any:
+        read = getattr(self._store, "world_evaluation", None)
+        return read() if read is not None else self._store.world()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._store, name)
 
 
 def harness(s: Settings | None = None) -> Harness:
