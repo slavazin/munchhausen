@@ -98,14 +98,14 @@ def test_f1_within_when_the_drift_moves_nothing(s: Settings) -> None:
 # --- F4 latency, stale-applied (L11) ---------------------------------------------------------------------
 
 
-def test_drift_latency_with_censoring(run: Any) -> None:
+def test_drift_latency_unresolved_is_unread(run: Any) -> None:
     rows, ctx = run
     f = R.read_forecast("F4", ctx.forecasts["F4"], rows, ctx)
     by = {r["name"]: r for r in f["readings"]}
     assert by["F4.ungated-governed"]["value"] == pytest.approx(90.0)   # 450 − 360
     assert f["verdict"]["F4.ungated-governed"] == "above"
-    assert "unresolved" in by["F4.naive-governed"]["note"]             # naive never supersedes: censored
-    assert f["verdict"]["F4.naive-governed"] == "above"
+    assert "held but unresolved" in by["F4.naive-governed"]["note"]    # naive never supersedes
+    assert f["verdict"]["F4.naive-governed"] == "unread"                 # an unresolved arm is not a reading
 
 
 def test_stale_applied_waits_label_horizon(run: Any) -> None:

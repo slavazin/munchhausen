@@ -97,14 +97,22 @@ class AtlasEpisodes(_Ledger[Episode]):
                              misses_out=row["out"]["misses"], n_out=row["out"]["n"])
 
     async def backtest_sample(self, run_id: str, arm: str, match: dict[str, Any], *, n: int,
-                              seed: int | None) -> list[Episode]:
+                              seed: int | None, prefer_terms: Sequence[str] = ()) -> list[Episode]:
         def branch(correct: bool) -> Pipeline:
             head: Pipeline = [{"$match": {"correct": correct}}]
+            # misses whose terms meet the hook's come first (M3: collection-only matches dilute the read)
+            prefer = bool(prefer_terms) and not correct
+            tm = {"$cond": [{"$gt": [{"$size": {"$setIntersection": [{"$ifNull": ["$terms", []]},
+                                                                      sorted(prefer_terms)]}}, 0]}, 0, 1]}
             if seed is None:
-                return [*head, {"$sample": {"size": n}}]
+                if not prefer:
+                    return [*head, {"$sample": {"size": n}}]
+                return [*head, {"$addFields": {"_tm": tm, "_r": {"$rand": {}}}}, {"$sort": {"_tm": 1, "_r": 1}},
+                        {"$limit": n}, {"$project": {"_tm": 0, "_r": 0}}]
             key = {"$toHashedIndexKey": {"$concat": [f"{seed}:", {"$toString": "$_id"}]}}
-            return [*head, {"$addFields": {"_bk": key}}, {"$sort": {"_bk": 1, "_id": 1}}, {"$limit": n},
-                    {"$project": {"_bk": 0}}]
+            fields: dict[str, Any] = {"_bk": key, "_tm": tm if prefer else 0}
+            return [*head, {"$addFields": fields}, {"$sort": {"_tm": 1, "_bk": 1, "_id": 1}}, {"$limit": n},
+                    {"$project": {"_bk": 0, "_tm": 0}}]
 
         pipeline: Pipeline = [{"$match": {**match, "run_id": run_id, "arm": arm}},
                               {"$facet": {"hits": branch(True), "misses": branch(False)}}]
@@ -137,9 +145,13 @@ class AtlasEpisodes(_Ledger[Episode]):
 class AtlasObservations(_Ledger[Observation]):
     model = Observation
 
-    async def open_for_pass(self, run_id: str, arm: str, *, since_round: int) -> list[Observation]:
-        cur = self._c.find({"run_id": run_id, "arm": arm, "disposition": ObservationDisposition.OPEN.value,
-                            "round": {"$gte": since_round}})
+    async def open_for_pass(self, run_id: str, arm: str, *, since_round: int,
+                            exclude_via: Sequence[str] = ("injection",)) -> list[Observation]:
+        q: Doc = {"run_id": run_id, "arm": arm, "disposition": ObservationDisposition.OPEN.value,
+                  "round": {"$gte": since_round}}
+        if exclude_via:
+            q["via"] = {"$nin": list(exclude_via)}
+        cur = self._c.find(q)
         return [Observation.model_validate(d) async for d in cur]
 
     async def dispose(self, ids: Sequence[str], disposition: ObservationDisposition, by: str) -> None:
@@ -366,19 +378,32 @@ class AtlasRuns:
         cur = self._runs.find({}).sort("started_at", -1).limit(limit)
         return [RunRecord.model_validate(d) async for d in cur]
 
-    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None) -> None:
-        await self._runs.update_one({"_id": run_id}, {"$set": {"ended_at": at, "models_served": models_served or {}}})
+    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None,
+                     lost_spend_writes: int = 0) -> None:
+        await self._runs.update_one({"_id": run_id}, {"$set": {"ended_at": at, "models_served": models_served or {}},
+                                                      "$inc": {"lost_spend_writes": lost_spend_writes}})
+
+    async def append_resume(self, run_id: str, entry: dict[str, Any]) -> None:
+        await self._runs.update_one({"_id": run_id}, {"$push": {"resumes": entry}})
 
     async def merge_round(self, run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> None:
         if self._episodes is None:
             raise RuntimeError("AtlasRuns was built without the episodes collection")
         await (await self._episodes.aggregate(round_pipeline(run_id, arm, round_, idx_range))).to_list()
+        key = {"run_id": run_id, "arm": arm, "round": round_}
+        if not await self._rounds.count_documents(key, limit=1):   # no episodes in range: an empty record
+            await self.put_round(RoundRecord(run_id=run_id, arm=arm, round=round_, idx_range=idx_range,
+                                             closed_at=datetime.now(UTC)))
 
 
 PLANTED_MAP = "planted_map"     # evaluation-only collection (S5); created on first write, no validator
 
 
-def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> Pipeline:
+INJECTION = "injection"   # Draft.source / Observation.via / spend meta.source of the injection beat (S6)
+
+
+def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int],
+                   inject_stage: str = "inject") -> Pipeline:
     """The round record, computed in Atlas and `$merge`d into `rounds` (SPEC § 20.2). Run over `episodes`.
 
     Populations: stream accuracy, self-assessed accuracy and the calibration gap over stream episodes with
@@ -386,7 +411,12 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
     V accuracy over `stream: "v"` episodes whose `v_at` (else `idx`) is in
     range; lifecycle counts from `drafts` of this round (admitted/refused) and from `decisions` whose
     `lifecycle.at_idx` is in range (superseded/moot/retired/converged); fires by role with `at_idx` in range;
-    `usd_cum` = the arm's spend so far, `usd` = `usd_cum` − the previous round's `usd_cum`."""
+    `usd_cum` = the arm's spend so far, `usd` = `usd_cum` − the previous round's `usd_cum`.
+    The injection beat is excluded throughout: drafts with `source: injection`, observations with
+    `via: injection`, spend with `meta.stage == inject_stage` (INJECT_STAGE) or `meta.source: injection`.
+    Accuracy, self-assessed accuracy and the gap exclude episodes with `error` (counted in `n_error`).
+    Tokens come from `spend` rows whose `meta.episode_id` is one of the round's stream episodes; with none
+    attributed they are null, never 0."""
     lo, hi = idx_range
     in_range = {"$gte": lo, "$lt": hi}
     is_stream = {"$eq": ["$stream", "stream"]}
@@ -394,29 +424,35 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
     is_v = {"$and": [{"$eq": ["$stream", "v"]}, {"$gte": [v_at, lo]}, {"$lt": [v_at, hi]}]}
     in_idx = {"$and": [{"$gte": ["$idx", lo]}, {"$lt": ["$idx", hi]}]}
     stream_in = {"$and": [is_stream, in_idx]}
+    errored = {"$gt": [{"$ifNull": ["$error", None]}, None]}
+    scored = {"$and": [stream_in, {"$not": [errored]}]}
 
     def when(cond: Any, val: Any) -> Doc:
         return {"$sum": {"$cond": [cond, val, 0]}}
 
-    tok = {"$objectToArray": {"$ifNull": ["$tokens", {}]}}
     return [
         {"$match": {"run_id": run_id, "arm": arm}},
         {"$match": {"$or": [{"idx": in_range}, {"v_at": in_range}]}},
         {"$group": {
             "_id": None,
             "n_stream": when(stream_in, 1),
-            "correct": when({"$and": [stream_in, "$correct"]}, 1),
-            "conf": when(stream_in, "$confidence"),
+            "n_error": when({"$and": [stream_in, errored]}, 1),
+            "n_scored": when(scored, 1),
+            "correct": when({"$and": [scored, "$correct"]}, 1),
+            "conf": when(scored, "$confidence"),
+            "ids": {"$push": {"$cond": [stream_in, "$_id", "$$REMOVE"]}},
             "n_v": when(is_v, 1),
             "correct_v": when({"$and": [is_v, "$correct"]}, 1),
             "view_filtered": when({"$and": [stream_in, {"$gt": [{"$size": {"$objectToArray": {
                 "$ifNull": ["$view_map", {}]}}}, 0]}]}, 1),
-            "tokens_in": when(stream_in, {"$ifNull": ["$tokens.in", 0]}),
-            "tokens_out": when(stream_in, {"$ifNull": ["$tokens.out", 0]}),
-            "tokens_all": when(stream_in, {"$sum": {"$map": {"input": tok, "in": "$$this.v"}}}),
         }},
+        {"$lookup": {"from": C.SPEND.value, "let": {"ids": "$ids"}, "pipeline": [
+            {"$match": {"meta.run_id": run_id, "meta.arm": arm, "meta.episode_id": {"$exists": True}}},
+            {"$match": {"$expr": {"$in": ["$meta.episode_id", "$$ids"]}}},
+            {"$group": {"_id": None, "tin": {"$sum": "$tokens_in"}, "tout": {"$sum": "$tokens_out"},
+                        "eps": {"$addToSet": "$meta.episode_id"}}}], "as": "toks"}},
         {"$lookup": {"from": C.DRAFTS.value, "pipeline": [
-            {"$match": {"run_id": run_id, "arm": arm, "round": round_}},
+            {"$match": {"run_id": run_id, "arm": arm, "round": round_, "source": {"$ne": INJECTION}}},
             {"$group": {"_id": "$status", "n": {"$sum": 1}}}], "as": "drafts"}},
         {"$lookup": {"from": C.DECISIONS.value, "pipeline": [
             {"$match": {"run_id": run_id, "arm": arm, "lifecycle.at_idx": in_range}},
@@ -425,13 +461,14 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
             {"$match": {"run_id": run_id, "arm": arm, "lifecycle.status": "admitted"}},
             {"$count": "n"}], "as": "store_admitted"}},
         {"$lookup": {"from": C.OBSERVATIONS.value, "pipeline": [
-            {"$match": {"run_id": run_id, "arm": arm, "disposition": "open"}},
+            {"$match": {"run_id": run_id, "arm": arm, "disposition": "open", "via": {"$ne": INJECTION}}},
             {"$count": "n"}], "as": "store_open_obs"}},
         {"$lookup": {"from": C.FIRES.value, "pipeline": [
             {"$match": {"run_id": run_id, "arm": arm, "at_idx": in_range}},
             {"$group": {"_id": "$role", "n": {"$sum": 1}}}], "as": "fires"}},
         {"$lookup": {"from": C.SPEND.value, "pipeline": [
-            {"$match": {"meta.run_id": run_id, "meta.arm": arm}},
+            {"$match": {"meta.run_id": run_id, "meta.arm": arm, "meta.stage": {"$ne": inject_stage},
+                        "meta.source": {"$ne": INJECTION}}},
             {"$group": {"_id": None, "usd": {"$sum": "$usd"}}}], "as": "spend"}},
         {"$lookup": {"from": C.ROUNDS.value, "pipeline": [
             {"$match": {"run_id": run_id, "arm": arm, "round": round_ - 1}},
@@ -441,15 +478,16 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
             "_flip": {"$arrayToObject": {"$map": {"input": "$flips", "in": {"k": "$$this._id", "v": "$$this.n"}}}},
             "_usd_cum": {"$ifNull": [{"$first": "$spend.usd"}, 0]},
             "_usd_prev": {"$ifNull": [{"$first": "$prev.usd_cum"}, 0]},
+            "_tin": {"$first": "$toks.tin"}, "_tout": {"$first": "$toks.tout"},
         }},
         {"$project": {
             "_id": 0, "run_id": {"$literal": run_id}, "arm": {"$literal": arm}, "round": {"$literal": round_},
             "idx_range": {"$literal": [lo, hi]},
-            "n_stream": 1,
-            "acc_stream": {"$cond": [{"$gt": ["$n_stream", 0]}, {"$divide": ["$correct", "$n_stream"]}, None]},
-            "acc_self_assessed": {"$cond": [{"$gt": ["$n_stream", 0]}, {"$divide": ["$conf", "$n_stream"]}, None]},
-            "calibration_gap": {"$cond": [{"$gt": ["$n_stream", 0]},
-                                          {"$divide": [{"$subtract": ["$conf", "$correct"]}, "$n_stream"]}, None]},
+            "n_stream": 1, "n_error": 1,
+            "acc_stream": {"$cond": [{"$gt": ["$n_scored", 0]}, {"$divide": ["$correct", "$n_scored"]}, None]},
+            "acc_self_assessed": {"$cond": [{"$gt": ["$n_scored", 0]}, {"$divide": ["$conf", "$n_scored"]}, None]},
+            "calibration_gap": {"$cond": [{"$gt": ["$n_scored", 0]},
+                                          {"$divide": [{"$subtract": ["$conf", "$correct"]}, "$n_scored"]}, None]},
             "acc_v": {"$cond": [{"$gt": ["$n_v", 0]}, {"$divide": ["$correct_v", "$n_v"]}, None]},
             "store_sizes": {"decisions_admitted": {"$ifNull": [{"$first": "$store_admitted.n"}, 0]},
                             "observations_open": {"$ifNull": [{"$first": "$store_open_obs.n"}, 0]}},
@@ -460,9 +498,11 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
             "moot": {"$ifNull": ["$_flip.moot", 0]},
             "converged": {"$ifNull": ["$_flip.converged", 0]},
             "fires": {"$arrayToObject": {"$map": {"input": "$fires", "in": {"k": "$$this._id", "v": "$$this.n"}}}},
-            "view_filtered": 1, "tokens_in": 1, "tokens_out": 1,
-            "tokens_per_episode": {"$cond": [{"$gt": ["$n_stream", 0]},
-                                             {"$divide": ["$tokens_all", "$n_stream"]}, None]},
+            "view_filtered": 1,
+            "tokens_in": {"$ifNull": ["$_tin", None]}, "tokens_out": {"$ifNull": ["$_tout", None]},
+            "tokens_per_episode": {"$cond": [{"$and": [{"$gt": ["$n_stream", 0]},
+                                                       {"$ne": [{"$ifNull": ["$_tin", None]}, None]}]},
+                                             {"$divide": [{"$add": ["$_tin", "$_tout"]}, "$n_stream"]}, None]},
             "usd_cum": "$_usd_cum",
             "usd": {"$subtract": ["$_usd_cum", "$_usd_prev"]},
             "usd_per_episode": {"$cond": [{"$gt": ["$n_stream", 0]},
@@ -480,7 +520,7 @@ _HEAVY = {"emb": 0}
 _EPISODE_FIELDS = {f: 1 for f in ("run_id", "arm", "idx", "stream", "question_id", "template", "persona", "terms",
                                   "consulted", "view_map", "answer", "confidence", "correct", "figure",
                                   "confirmed_figure", "retry_correct", "error", "tokens", "latency_ms",
-                                  "world_version", "v_at", "residuals")}
+                                  "world_version", "v_at", "residuals", "matched_ids", "collections")}
 
 
 class AtlasEvidence:
@@ -497,7 +537,7 @@ class AtlasEvidence:
         out: dict[str, list[Doc]] = {
             "episodes": await self._db[C.EPISODES.value].find(q, _EPISODE_FIELDS).sort("idx", 1).to_list(),
         }
-        for name in (C.DECISIONS, C.FIRES, C.BACKTESTS, C.DRAFTS, C.ROUNDS):
+        for name in (C.DECISIONS, C.FIRES, C.BACKTESTS, C.DRAFTS, C.ROUNDS, C.TOOL_ACCESS):
             out[name.value] = await self._db[name.value].find(q, _HEAVY).to_list()
         out[PLANTED_MAP] = await self._db[PLANTED_MAP].find(q).to_list()
         return out

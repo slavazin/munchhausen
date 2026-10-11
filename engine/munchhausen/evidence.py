@@ -37,7 +37,7 @@ def git_state(root: Path = REPO_ROOT) -> tuple[str | None, bool | None]:
     try:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True,
                              check=True).stdout.strip()
-        dirty = bool(subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True,
+        dirty = bool(subprocess.run(["git", "status", "--porcelain", "-uno"], cwd=root, capture_output=True, text=True,
                                     check=True).stdout.strip())
         return sha, dirty
     except (OSError, subprocess.CalledProcessError):
@@ -61,7 +61,7 @@ def forecast_register(settings: Settings) -> dict[str, dict[str, Any]]:
 
 def build_run_record(settings: Settings, *, selection: dict[str, dict[str, str]], capabilities: dict[str, Any],
                      git: tuple[str | None, bool | None], prompts: dict[str, str], pack_hash: str | None,
-                     world_counts: dict[str, int], now: datetime) -> RunRecord:
+                     world_counts: dict[str, int], now: datetime, length: int | None = None) -> RunRecord:
     """The `runs` document (pure). Knobs exclude every secret; keys appear as presence only."""
     register = forecast_register(settings)
     knobs = settings.knobs()
@@ -77,7 +77,10 @@ def build_run_record(settings: Settings, *, selection: dict[str, dict[str, str]]
         capabilities=capabilities, started_at=now,
         git_sha=git[0], git_dirty=git[1], isolation=settings.isolation(), models=settings.model_ids(),
         prompt_hashes=prompts, pack_hash=pack_hash, world_counts=world_counts, forecast_register=register,
-        keys_present=present, auth_mode=settings.anthropic_auth_mode(),
+        pack_file_hash=file_sha256(settings.pack_path()),
+        keys_present=present, auth_mode=settings.anthropic_auth_mode(), length=length,
+        arm_specs={a: spec.model_dump(mode="json") for a, spec in settings.arms().items() if a in selection}
+        if selection else {a: spec.model_dump(mode="json") for a, spec in settings.arms().items()},
     )
 
 
@@ -108,18 +111,29 @@ def _trace(h: Any, name: str, payload: dict[str, Any]) -> None:
 # --- the seams S2 calls ------------------------------------------------------------------------------
 
 
-async def start_run(h: Any) -> RunRecord:
-    """Write `runs` before the first episode. Idempotent on resume: an existing record is returned unedited
-    (forecasts and knobs never change after the first episode; a diff against the current config is warned).
+def resume_diff(registered: RunRecord, current: RunRecord) -> dict[str, dict[str, Any]]:
+    """What moved between the registered run record and the one this process would write: knobs, git sha,
+    prompt hashes, ports, pack hash, forecasts. Each entry is {registered, current} (knobs: per knob)."""
+    moved: dict[str, dict[str, Any]] = {}
+    for k in sorted(set(registered.knobs) | set(current.knobs)):
+        a, b = registered.knobs.get(k), current.knobs.get(k)
+        if a != b:
+            moved[f"knobs.{k}"] = {"registered": a, "current": b}
+    for f in ("git_sha", "prompt_hashes", "ports", "pack_hash", "pack_file_hash", "forecast_register", "arm_specs"):
+        a, b = getattr(registered, f), getattr(current, f)
+        if a != b:
+            moved[f] = {"registered": a, "current": b}
+    return moved
+
+
+async def start_run(h: Any, length: int | None = None) -> RunRecord:
+    """Write `runs` before the first episode (with `length` = `run --length`). On resume the registered record
+    is never edited: what moved since (knobs, git sha, prompt hashes, ports, pack hash, forecasts, length) is
+    appended as one `resumes[]` entry, and the report prints it. The registered forecasts hold.
     Refuses to register a run that already has episodes and no record."""
     s: Settings = h.settings
     existing = await h.store.runs.get(s.run_id)
-    if existing is not None:
-        if existing.forecast_register and existing.forecast_register != forecast_register(s):
-            print(f"[evidence] run {s.run_id}: conf/forecasts.yaml differs from the registered forecasts; "
-                  "the registered ones hold. Re-register under a new RUN_ID.", file=sys.stderr)
-        return existing
-    if await h.store.evidence.episode_count(s.run_id) > 0:
+    if existing is None and await h.store.evidence.episode_count(s.run_id) > 0:
         raise PreRegistrationError(f"run {s.run_id} has episodes but no run record: forecasts must be "
                                    "registered before the first episode. Start a new RUN_ID.")
     try:
@@ -129,24 +143,37 @@ async def start_run(h: Any) -> RunRecord:
     pack_hash, counts = await _world_facts(h, s)
     record = build_run_record(s, selection=h.selection(), capabilities=caps, git=git_state(),
                               prompts=prompt_hashes(), pack_hash=pack_hash, world_counts=counts,
-                              now=datetime.now(UTC))
+                              now=datetime.now(UTC), length=length)
+    if existing is not None:
+        moved = resume_diff(existing, record)
+        if length != existing.length:
+            moved["length"] = {"registered": existing.length, "current": length}
+        if moved:
+            print(f"[evidence] run {s.run_id} resumed with {len(moved)} moved field(s); recorded in resumes[]. "
+                  "The registered forecasts hold.", file=sys.stderr)
+            await h.store.runs.append_resume(s.run_id, {"at": datetime.now(UTC), "length": length,
+                                                        "git_dirty": record.git_dirty, "moved": moved})
+        return existing
     stored = await h.store.runs.start(record)
-    _trace(h, "run_start", {"git_sha": stored.git_sha, "arms": sorted(stored.ports)})
+    _trace(h, "run_start", {"git_sha": stored.git_sha, "arms": sorted(stored.ports), "length": length})
     return stored
 
 
 async def close_round(h: Any, arm: str, round_: int, idx_range: tuple[int, int]) -> None:
-    """`$merge` the round's record into `rounds` (computed in Atlas). `idx_range` = (lo, hi), half-open."""
+    """`$merge` the round's record into `rounds` (computed in Atlas). `idx_range` = (lo, hi), half-open.
+    The runner emits `round_closed`; no duplicate event here."""
     await h.store.runs.merge_round(h.settings.run_id, arm, round_, idx_range)
-    _trace(h, "round_close", {"arm": arm, "round": round_, "idx": idx_range[1]})
 
 
 async def finish_run(h: Any) -> None:
-    """Stamp `ended_at` and `models_served` (per stage: requested vs served model ids, ok and failed calls by
-    error), read from `spend`. A party whose model never answered shows here as failed calls, not as silence."""
+    """Stamp `ended_at`, `models_served` (per stage: requested vs served model ids, ok and failed calls by
+    error, read from `spend`) and `lost_spend_writes`. A party whose model never answered shows as failed
+    calls, not as silence. Called from `run` in a `finally`, so a crashed run is stamped too."""
     served = R.models_served(await h.store.evidence.spend_summary(h.settings.run_id))
-    await h.store.runs.finish(h.settings.run_id, datetime.now(UTC), served)
-    _trace(h, "run_finish", {})
+    models = getattr(h, "ports", {}).get("_run", {}).get("models")
+    lost = int(getattr(models, "lost_spend_writes", 0) or 0)
+    await h.store.runs.finish(h.settings.run_id, datetime.now(UTC), served, lost)
+    _trace(h, "run_finish", {"lost_spend_writes": lost})
 
 
 # --- readings over a run -------------------------------------------------------------------------------
@@ -156,8 +183,20 @@ def reading_context(settings: Settings, run: RunRecord) -> R.Context:
     """Readings use the run's registered knobs and forecasts, never the current config's. The pack (evaluation
     side) supplies template → quirk and the drift schedule; a missing pack leaves those readings unread."""
     k = {**settings.knobs(), **run.knobs}
+    notes: list[str] = []
     arms_all = settings.arms()
-    arms: dict[str, ArmSpec] = {a: arms_all[a] for a in (run.ports or arms_all) if a in arms_all}
+    if run.arm_specs:                      # the arms as registered at start; current conf only as a fallback
+        arms: dict[str, ArmSpec] = {a: ArmSpec.model_validate(v) for a, v in run.arm_specs.items()}
+        moved = sorted(a for a in arms if a in arms_all and arms_all[a] != arms[a])
+        if moved:
+            notes.append(f"arm specs differ from the current conf/arms.yaml for {moved}; the registered ones are read")
+    else:
+        arms = {a: arms_all[a] for a in (run.ports or arms_all) if a in arms_all}
+        notes.append("run record carries no arm_specs: arms read from the current conf/arms.yaml")
+    current_pack = file_sha256(settings.pack_path(run.pack))
+    if run.pack_file_hash and current_pack and run.pack_file_hash != current_pack:
+        notes.append(f"pack file hash {current_pack[:12]} differs from the registered {run.pack_file_hash[:12]}: "
+                     "template→quirk and drift schedule are read from the current pack file")
     template_quirk: dict[str, str] = {}
     drift_at: dict[str, int] = {}
     drift_quirk: dict[str, str] = {}
@@ -185,6 +224,7 @@ def reading_context(settings: Settings, run: RunRecord) -> R.Context:
         premise_first=int(k.get("backtest_premise_first", settings.backtest_premise_first)),
         premise_share=float(k.get("backtest_premise_share", settings.backtest_premise_share)),
         forecasts=run.forecast_register or forecast_register(settings),
+        rolling_window=int(k.get("paired_rolling_window", settings.paired_rolling_window)), notes=tuple(notes),
     )
 
 

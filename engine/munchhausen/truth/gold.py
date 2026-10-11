@@ -69,10 +69,14 @@ class PackGold:
         return params
 
     def slots_for(self, quirk_ids: tuple[str, ...], world_version: str,
-                  variant: tuple[str, dict[str, Any]] | None = None) -> Slots:
+                  variant: tuple[str, dict[str, Any]] | None = None, *, convention: bool = False) -> Slots:
         overrides = []
         for qid in quirk_ids:
             q = self._pack.quirk(qid)
+            if convention:                      # the prior trap's figure (checks only): base slots if none
+                if q.convention is not None:
+                    overrides.append(GOLD[q.convention.transform](dict(q.convention.params)))
+                continue
             if q.gold is None:
                 continue
             params = self.quirk_params(qid, world_version)
@@ -83,10 +87,11 @@ class PackGold:
 
     def compute(self, question: Question, world_version: str, data: Data, *,
                 variant: tuple[str, dict[str, Any]] | None = None,
-                extra_quirks: tuple[str, ...] = ()) -> Answer:
-        """`extra_quirks` applies further quirks' gold transforms (the gold isolation test only)."""
+                extra_quirks: tuple[str, ...] = (), convention: bool = False) -> Answer:
+        """`extra_quirks` applies further quirks' gold transforms (the gold isolation test only);
+        `convention` computes the prior trap's figure instead of gold (the poison check only)."""
         hidden = self._bank.hidden(question.id)
         tpl = self._bank.template(question.template)
-        slots = self.slots_for((*hidden.quirks, *extra_quirks), world_version, variant)
+        slots = self.slots_for((*hidden.quirks, *extra_quirks), world_version, variant, convention=convention)
         value = MEASURE[tpl.measure](data, slots, hidden.params, tpl.args)
         return slots["present"](value)

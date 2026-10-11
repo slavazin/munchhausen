@@ -77,11 +77,12 @@ class EpisodeRepository(Protocol):
         ...
 
     async def backtest_sample(self, run_id: str, arm: str, match: dict[str, Any], *, n: int,
-                              seed: int | None) -> list[Episode]:
+                              seed: int | None, prefer_terms: Sequence[str] = ()) -> list[Episode]:
         """The backtest's balanced sample (§ 7.4, § 20.2) over a complete `$match` the caller builds: one
         `$facet` branch over episodes scored correct, one over first-attempt misses, ≤ n in total, a short
         stratum topped up from the other. `seed` set: each branch is ordered by a seeded hash of `_id`, so the
-        same draft over the same store draws the same sample; `None`: `$sample`."""
+        same draft over the same store draws the same sample; `None`: `$sample`. `prefer_terms`: misses
+        whose `terms` meet these come first (collection-only matches fill the remainder)."""
 
     async def direction_read_window(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int,
                                     after_idx: int | None = None, last_n: int | None = None) -> DirectionRead:
@@ -95,7 +96,11 @@ class EpisodeRepository(Protocol):
 class ObservationRepository(Protocol):
     async def put(self, observation: Observation) -> None: ...
 
-    async def open_for_pass(self, run_id: str, arm: str, *, since_round: int) -> list[Observation]: ...
+    async def open_for_pass(self, run_id: str, arm: str, *, since_round: int,
+                            exclude_via: Sequence[str] = ("injection",)) -> list[Observation]:
+        """Open observations for the episodic pass. Injected evidence (`via=injection`) is excluded by
+        default: the injection beat adjudicates its own shape and never feeds the organic pass."""
+        ...
 
     async def dispose(self, ids: Sequence[str], disposition: ObservationDisposition, by: str) -> None: ...
 
@@ -272,8 +277,14 @@ class RunRepository(Protocol):
 
     async def list_runs(self, limit: int) -> list[RunRecord]: ...
 
-    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None) -> None:
-        """Stamp `ended_at` and `models_served`: the only fields of a run record written after its start."""
+    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None,
+                     lost_spend_writes: int = 0) -> None:
+        """Stamp `ended_at`, `models_served`, `lost_spend_writes`. With `resumes[]`, the only fields of a run
+        record written after its start."""
+        ...
+
+    async def append_resume(self, run_id: str, entry: dict[str, Any]) -> None:
+        """Append one entry to `resumes[]` (what moved since registration). Never edits registered fields."""
         ...
 
     async def merge_round(self, run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> None:

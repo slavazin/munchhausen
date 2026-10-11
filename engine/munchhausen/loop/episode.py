@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from munchhausen.agent.consultation import Consulter
 from munchhausen.agent.execute import ExecutionError, execute
 from munchhausen.agent.proposer import Proposer
-from munchhausen.agent.usage import CURRENT_EPISODE, EpisodeUsage
+from munchhausen.agent.usage import CURRENT_EPISODE, CURRENT_EPISODE_ID, EpisodeUsage
 from munchhausen.domain.arm import ArmSpec
 from munchhausen.domain.common import Answer, Disposition, FireRole, Pipeline
 from munchhausen.domain.decision import Decision
@@ -80,7 +80,7 @@ class ForwardPass:
         authority = self.arm.authority and stream == STREAM
         ids = {"episode_id": eid, "arm": self.arm.name, "idx": idx, "stream": stream}
         usage = EpisodeUsage(eid)
-        token = CURRENT_EPISODE.set(usage)
+        token, id_token = CURRENT_EPISODE.set(usage), CURRENT_EPISODE_ID.set(eid)
         self.trace.begin({**ids, "template": question.template})
         answer: Answer = None
         try:
@@ -89,6 +89,7 @@ class ForwardPass:
             return episode
         finally:
             CURRENT_EPISODE.reset(token)
+            CURRENT_EPISODE_ID.reset(id_token)
             self.trace.finish(answer)
 
     async def _run(self, idx: int, question: Question, stream: str, at: int, eid: str, authority: bool,
@@ -130,6 +131,7 @@ class ForwardPass:
             if authority else None, retry_pipeline=retry_pipeline, retry_correct=retry_correct,
             residuals=residuals, error=error, latency_ms=int((time.monotonic() - t0) * 1000), stream=stream,
             collections=question.collections, v_at=at if stream == V else None, tokens=dict(usage.tokens),
+            matched_ids=tuple(d.id for d in consulted),
         )
         await self.store.episodes.put(episode)
         self.trace.event("episode_written", {**ids, "correct": episode.correct, "error": error,

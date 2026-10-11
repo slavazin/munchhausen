@@ -146,6 +146,9 @@ class Settings(BaseSettings):
     backtest_sample: Literal["hashed", "random"] = "hashed"   # hashed: `$facet` + seeded hash order (replayable)
     backtest_seed: int = 17             # seed of the hashed balanced sample
     backtest_concurrency: int = 4       # paired replays in flight per backtest (2 × BACKTEST_N calls in total)
+    backtest_min_n: int = 4             # scored pairs below this: L4 holds (`insufficient`), never refuses
+    backtest_recent: int | None = 300   # a new draft's population: the last N episodes (None: all); a
+    #                                     supersede reads from the predecessor's fire instead
     l2_route_contested: bool = False    # L2 also routes a `new` draft as supersede when exactly one contested
     #                                     neighbour shares a hook term (off: minimum configuration, § 3a)
     direct_merge: bool = True           # lessons merge into an admitted decision at NAIVE_MERGE_COSINE
@@ -163,7 +166,7 @@ class Settings(BaseSettings):
     nominator_tool_max_rows: int = 50       # rows one world-tool call returns to the nominator ($limit appended)
     nominator_tool_max_time_ms: int = 5000  # maxTimeMS per world-tool aggregate
     nominator_tool_result_chars: int = 6000 # characters of one tool result shown to the nominator
-    nominator_residual_window: int = 10     # recent consultations read per neighbour for its residuals
+    nominator_residual_window: int = 4     # recent consultations read per neighbour for its residuals
     nominator_min_options: int = 2          # options rows: >= 1 prior (rejected) + the chosen definition
     # Direction read window when no contested neighbour dates a drift: the last N episodes the shape's
     # presentation matches (and the same idx window outside it). 40 = 4 x BAR_MIN_MATCHED: a miss-rate gap
@@ -196,6 +199,10 @@ class Settings(BaseSettings):
     }
     response_cache: bool = False        # cache parsed model responses under var/cache/ (trace-invariance replay)
     planted_map_concurrency: int = 4    # concurrent planted-map judge calls (evaluation only)
+    planted_map_fallback_model: str = "claude-sonnet-5-5"   # judge used when PLANTED_MAP_MODEL fails on a decision
+    planted_map_max_tokens: int = 2000
+    evaluation_spend_arm: str = "evaluation"   # spend `meta.arm` of evaluation-only calls (the planted-map judge)
+    paired_rolling_window: int = 90     # demo beat 1: rolling paired difference vs the reference arm (episodes)
     anthropic_oauth_beta: str = "oauth-2025-04-20"   # beta header sent when authenticating with an OAuth token
     chartjs_url: str = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 
@@ -240,6 +247,12 @@ class Settings(BaseSettings):
     inject_seed: int = 101              # question instances for injection: never the stream's seed
     inject_per_template: int = 1        # questions per chosen template (≥ BAR_MIN_OBS in total)
     inject_scan_max: int = 5000         # questions scanned to find instances of the chosen templates
+    inject_idx_base: int = -1_000_000   # injection episodes take free idx <= this: far below V's -(1 + k*V_SIZE + j)
+    inject_max_templates: int = 3       # distinct templates per injection (cost: forward passes + 2*BACKTEST_N)
+    inject_stage: str = "inject"        # spend `meta.stage` of the injection's proposer calls; rounds exclude it
+    viewer_max_jobs: int = 20           # injection jobs kept in memory; the oldest finished are dropped
+    viewer_allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")   # Host header check (plus VIEWER_HOST)
+    viewer_allow_public: bool = False   # refuse binding a non-loopback address unless set
 
     # ------------------------------------------------------------------------------------------------
 
@@ -255,7 +268,7 @@ class Settings(BaseSettings):
     def backtest_thresholds(self) -> BacktestThresholds:
         return BacktestThresholds(min_fixed=self.backtest_min_fixed,
                                   min_fixed_heldout=self.backtest_min_fixed_heldout,
-                                  max_broken=self.backtest_max_broken)
+                                  max_broken=self.backtest_max_broken, min_n=self.backtest_min_n)
 
     def knobs(self) -> dict[str, Any]:
         """Every non-secret knob, for `runs.knobs` at run start (SPEC § 11 pre-registration)."""

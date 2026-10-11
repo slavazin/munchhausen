@@ -19,18 +19,27 @@ def _echo(obj: Any) -> None:
     typer.echo(json.dumps(obj, indent=2, default=str))
 
 
-async def _start_run(h: Harness) -> None:
+async def _start_run(h: Harness, length: int | None = None) -> None:
     from munchhausen import evidence
 
     try:
-        await evidence.start_run(h)
+        await evidence.start_run(h, length=length)
     except NotImplementedError as e:
         log.error("RUN RECORD NOT WRITTEN (%s): this run has no pre-registered `runs` row", e)
 
 
+async def _finish_run(h: Harness) -> None:
+    from munchhausen import evidence
+
+    try:
+        await evidence.finish_run(h)
+    except Exception as e:  # noqa: BLE001 - a failed stamp is logged; it never masks the run's own error
+        log.error("RUN END NOT STAMPED (%s: %s)", type(e).__name__, e)
+
+
 async def run_arms(h: Harness, arms: list[str], length: int | None) -> dict[str, Any]:
     """Every arm concurrently over one World; one arm's failure is reported, never cancels the others."""
-    await _start_run(h)
+    await _start_run(h, length)
     # the vocabulary precedes the first episode: hooks, the nominator and the escape all read `terms`.
     # Idempotent (terms upsert by name; the same seed mines the same phrases), so a resume re-runs it safely.
     log.info("seed-vocab: %s", {k: v for k, v in (await seed_vocab(h)).items() if k != "sample"})
@@ -78,8 +87,11 @@ def register(app: typer.Typer) -> None:
                 unknown = set(chosen) - set(h.arms)
                 if unknown:
                     raise typer.BadParameter(f"unknown arms: {sorted(unknown)}")
-                _echo({"run_id": h.settings.run_id, "ports": {a: h.selection()[a] for a in chosen},
-                       "results": await run_arms(h, chosen, length)})
+                try:
+                    _echo({"run_id": h.settings.run_id, "ports": {a: h.selection()[a] for a in chosen},
+                           "results": await run_arms(h, chosen, length)})
+                finally:
+                    await _finish_run(h)
             finally:
                 await h.close()
         asyncio.run(go())

@@ -8,8 +8,10 @@ Effort is sent only where configured — Haiku 4.5 rejects `effort`.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
+import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -64,6 +66,7 @@ class AnthropicModels:
         self.client = AsyncAnthropic(**client_kwargs(settings))
         self._s = settings
         self._spend = spend
+        self.lost_spend_writes = 0          # stamped in `runs` by `evidence.finish_run`
 
     # --- port methods: each delegates to its party module (impl/parties/) ---------------------------
 
@@ -88,11 +91,13 @@ class AnthropicModels:
     # --- shared call path --------------------------------------------------------------------------
 
     async def parse(self, *, stage: str, arm: str, model: str, system: str, user: str, wire: type[W],
-                     effort: str | None = None, max_tokens: int = 16000) -> W:
+                     effort: str | None = None, max_tokens: int = 16000, temperature: float | None = None) -> W:
         """One structured call. Every call writes a `spend` row — a failed call too (`ok=False`, the
         exception class), so failures are evidence. With `RESPONSE_CACHE`, a hit returns the stored parsed
-        output and writes a zero-token row with `request_id="cache"` (trace-invariance replay, SPEC § 21)."""
-        cache = self._cache_path(model, system, user, wire) if self._s.response_cache else None
+        output and writes a zero-token row with `request_id="cache"` (trace-invariance replay, SPEC § 21).
+        `temperature` is sent as `extra_body` only when set (some models reject it)."""
+        cache = (self._cache_path(model, system, user, wire, arm=arm, effort=effort, max_tokens=max_tokens,
+                                  temperature=temperature) if self._s.response_cache else None)
         if cache is not None and cache.exists():
             out = wire.model_validate_json(cache.read_text())
             await self._record(stage=stage, arm=arm, model=model, usage=None, latency_ms=0, system=system,
@@ -101,6 +106,8 @@ class AnthropicModels:
         kwargs: dict[str, Any] = {}
         if effort:
             kwargs["output_config"] = {"effort": effort}
+        if temperature is not None:
+            kwargs["extra_body"] = {"temperature": temperature}
         t0 = time.monotonic()
         try:
             msg = await self.client.messages.parse(
@@ -121,7 +128,9 @@ class AnthropicModels:
                            request_id=request_id, served_model=getattr(msg, "model", None))
         if cache is not None:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(msg.parsed_output.model_dump_json())
+            tmp = cache.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(msg.parsed_output.model_dump_json())
+            os.replace(tmp, cache)                          # atomic: a reader never sees a partial file
         return msg.parsed_output
 
     async def record_call(self, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int,
@@ -139,21 +148,33 @@ class AnthropicModels:
                       request_id: str | None = None, error: BaseException | None = None,
                       served_model: str | None = None) -> None:
         row = spend_row(self._s, stage=stage, arm=arm, model=model, usage=usage, latency_ms=latency_ms,
-                        system=system, request_id=request_id, error=error, served_model=served_model)
-        episode = CURRENT_EPISODE.get()   # S2: the forward pass's episode, if this call runs inside one
+                        system=system, request_id=request_id, error=error, served_model=served_model,
+                        episode_id=current_episode_id())
+        episode = CURRENT_EPISODE.get()   # S2: the episode's usage accumulator → `episodes.tokens`
         if episode is not None:
-            row = row.model_copy(update={"meta": {**row.meta, "episode_id": episode.episode_id}})
             episode.add(row.tokens_in, row.tokens_out)
         if self._spend is None:
             return
         try:
             await self._spend.record(row)
-        except Exception as e:   # a lost spend row must not fail the episode; it is reported, not hidden
+        except Exception as e:   # a lost spend row must not fail the episode; it is counted and stamped in `runs`
+            self.lost_spend_writes += 1
             print(f"[spend] row not written ({type(e).__name__}): {stage} {arm} {model}", file=sys.stderr)
 
-    def _cache_path(self, model: str, system: str, user: str, wire: type[BaseModel]) -> Path:
-        h = hashlib.sha256("\x1f".join((model, wire.__name__, system, user)).encode()).hexdigest()
+    def _cache_path(self, model: str, system: str, user: str, wire: type[BaseModel], *, arm: str,
+                    effort: str | None, max_tokens: int, temperature: float | None) -> Path:
+        parts = (model, wire.__name__, arm, str(effort), str(max_tokens), str(temperature), system, user)
+        h = hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
         return self._s.var_dir / "cache" / f"{h}.json"
+
+
+def current_episode_id() -> str | None:
+    """The episode a call belongs to, from the `ContextVar` named `current_episode_id` that the forward pass
+    sets (S2). Found by name so this module depends on no loop module; None outside an episode."""
+    for var, value in contextvars.copy_context().items():
+        if var.name == "current_episode_id":
+            return str(value) if value is not None else None
+    return None
 
 
 def client_kwargs(settings: Settings) -> dict[str, Any]:
@@ -184,14 +205,17 @@ def sha256(text: str) -> str:
 
 def spend_row(settings: Settings, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int, system: str,
               request_id: str | None = None, error: BaseException | None = None,
-              served_model: str | None = None) -> SpendRow:
-    """The `spend` row of one call (pure): tokens incl. cache, list-price USD, prompt hash, request id."""
+              served_model: str | None = None, episode_id: str | None = None) -> SpendRow:
+    """The `spend` row of one call (pure): tokens incl. cache, list-price USD, prompt hash, request id.
+    `meta.episode_id` is set when the call ran inside an episode (rounds attribute tokens through it)."""
     t_in = int(getattr(usage, "input_tokens", 0) or 0)
     t_out = int(getattr(usage, "output_tokens", 0) or 0)
     c_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
     c_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     return SpendRow(
-        at=datetime.now(UTC), meta={"run_id": settings.run_id, "arm": arm, "stage": stage, "model": model},
+        at=datetime.now(UTC),
+        meta={"run_id": settings.run_id, "arm": arm, "stage": stage, "model": model,
+              **({"episode_id": episode_id} if episode_id else {})},
         tokens_in=t_in, tokens_out=t_out, latency_ms=latency_ms,
         usd=settings.usd(model, t_in, t_out, c_read, c_write),
         tokens_cache_read=c_read, tokens_cache_write=c_write,

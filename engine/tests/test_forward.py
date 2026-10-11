@@ -667,6 +667,8 @@ def test_episode_tokens_sum_the_calls_made_inside_it() -> None:
         async def propose(self, inp: ProposerInput) -> Proposal:
             usage = CURRENT_EPISODE.get()
             assert usage is not None
+            from munchhausen.impl.models_anthropic import current_episode_id
+            assert current_episode_id() == usage.episode_id == "r:hooks:e0"   # spend meta.episode_id
             usage.add(100, 20)          # what the shared call path does per call
             return await super().propose(inp)
 

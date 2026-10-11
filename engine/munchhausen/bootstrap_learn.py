@@ -99,7 +99,7 @@ def backtester_for(h: Any, arm: str) -> Backtester:
             max_time_ms=s.execute_max_time_ms, backtests=store.backtests, tool_access=store.tool_access,
             schema=lambda: h.world().schema_summary(),
             seed=s.backtest_seed if s.backtest_sample == "hashed" else None,
-            concurrency=s.backtest_concurrency, trace=_trace(h))
+            concurrency=s.backtest_concurrency, trace=_trace(h), recent=s.backtest_recent)
     return cache["backtester"]
 
 
@@ -110,7 +110,8 @@ def curator_for(h: Any, arm: str) -> Any:
     if "curator" not in cache:
         s, store, spec = h.settings, h.store, h.arms[arm]
         layers: dict[str, Callable[[], Any]] = {
-            "l0": (lambda: LessonShape()) if spec.write_path in LESSON_PATHS else (lambda: L0Shape(store.terms)),
+            "l0": ((lambda: LessonShape()) if spec.write_path in LESSON_PATHS
+                   else (lambda: L0Shape(store.terms, world=store.world()))),
             "l1": lambda: L1Bar(min_templates=s.bar_min_templates, min_templates_floor=s.bar_min_templates_floor),
             "l2": lambda: L2Neighbours(threshold=s.neighbour_rerank, decisions=store.decisions, fires=store.fires,
                                        route_contested=s.l2_route_contested),
@@ -194,11 +195,10 @@ def _unavailable(h: Any, arm: str, round_: int, what: str, e: BaseException) -> 
 
 async def round_episodes(h: Any, arm: str, lo: int, hi: int) -> list[Episode]:
     """The round's stream episodes, through the learner read: full for arms with an authority, blind
-    (evaluation-only fields projected away) otherwise. `idx_range` is read inclusively; every write
-    downstream is idempotent per episode, so an overlap costs nothing."""
+    (evaluation-only fields projected away) otherwise. `idx_range` is half-open, `[lo, hi)`."""
     spec: ArmSpec = h.arms[arm]
     docs = await h.store.episodes.for_learner(h.settings.run_id, arm, with_authority=spec.authority,
-                                              filter={"stream": "stream", "idx": {"$gte": lo, "$lte": hi}})
+                                              filter={"stream": "stream", "idx": {"$gte": lo, "$lt": hi}})
     rows = [Episode.model_validate(d) if spec.authority else blind(d) for d in docs]
     rows = [e for e in rows if not failed(e)]   # S2: failed-episode records keep pairing, never feed learning
     return sorted(rows, key=lambda e: e.idx)
@@ -255,3 +255,58 @@ def backward_for(h: Any, arm: str) -> RoundHook:
         await lifecycle_for(h, arm).sweep(s.run_id, arm, hi)
 
     return hook
+
+
+# --- S6 seams (additive): the injection's nominator and the owner port (L5) --------------------------
+
+
+def nominator_for(h: Any, arm: str) -> Any:
+    """The arm's `learn/nominate.Nominator`, built exactly as `backward_for` builds it (same cache entry)."""
+    return _collaborator(h, arm, "nominator", "munchhausen.learn.nominate", "Nominator", _deps(h, arm))
+
+
+class OwnerRefused(ValueError):
+    """An owner disposition the port refuses (e.g. admitting a draft whose only evidence is injected)."""
+
+
+@dataclasses.dataclass
+class OwnerPort:
+    """L5 through the arm's Adjudicator. The arm comes from the record; `at_idx` from the arm's cursor."""
+
+    h: Any
+
+    async def _at_idx(self, run_id: str, arm: str) -> int:
+        cursor = await self.h.store.cursors.get(run_id, arm)
+        return 0 if cursor is None else cursor.next_idx
+
+    async def dispose_draft(self, draft_id: str, verdict: str, note: str) -> dict[str, Any]:
+        from munchhausen.domain.draft import Verdict
+        from munchhausen.domain.observation import Via
+
+        store = self.h.store
+        draft = await store.drafts.get(draft_id)
+        if draft is None:
+            raise OwnerRefused(f"unknown draft {draft_id}")
+        v = Verdict(verdict)
+        if v is Verdict.ADMIT:
+            sources = [await store.observations.get(o) for o in draft.source_observation_ids]
+            vias = {o.via for o in sources if o is not None}
+            if draft.source == Via.INJECTION.value or (vias and vias <= {Via.INJECTION}):
+                raise OwnerRefused(f"{draft_id}: every source is injected evidence; the owner may not admit it")
+        at_idx = await self._at_idx(draft.run_id, draft.arm)
+        record = await adjudicator_for(self.h, draft.arm).owner_dispose_draft(draft_id, v, at_idx, note)
+        return {"draft_id": draft_id, "verdict": v.value, "status": record.status.value, "at_idx": at_idx}
+
+    async def dispose_fire(self, fire_id: str, disposition: str, note: str) -> dict[str, Any]:
+        from munchhausen.domain.common import FireDisposition
+
+        fire = await self.h.store.fires.get(fire_id)
+        if fire is None:
+            raise OwnerRefused(f"unknown fire {fire_id}")
+        d = FireDisposition(disposition)
+        await adjudicator_for(self.h, fire.arm).owner_dispose_fire(fire_id, d, note)
+        return {"fire_id": fire_id, "disposition": d.value, "decision_id": fire.decision_id}
+
+
+def owner_port(h: Any) -> OwnerPort:
+    return OwnerPort(h)

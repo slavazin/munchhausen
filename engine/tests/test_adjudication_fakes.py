@@ -104,13 +104,14 @@ class FakeEpisodes:
         return out
 
     async def backtest_sample(self, run_id: str, arm: str, match: dict[str, Any], *, n: int,
-                              seed: int | None) -> list[Episode]:
+                              seed: int | None, prefer_terms: Sequence[str] = ()) -> list[Episode]:
         from munchhausen.store.repositories import balance
 
         rows = [e for e in self.st.episodes.values() if e.run_id == run_id and e.arm == arm
                 and _matches_filter(e.model_dump(by_alias=True), match)]
         rows.sort(key=lambda e: hashlib.sha256(f"{seed}:{e.id}".encode()).hexdigest())
-        return balance([e for e in rows if e.correct], [e for e in rows if not e.correct], n)
+        misses = sorted((e for e in rows if not e.correct), key=lambda e: not set(e.terms) & set(prefer_terms))
+        return balance([e for e in rows if e.correct], misses, n)
 
     async def consultations_of(self, run_id: str, arm: str, decision_id: str, last_n: int) -> list[Episode]:
         rows = sorted((e for e in self.st.episodes.values()
@@ -323,7 +324,7 @@ class FakeModels:
         q = inp.question.id
         answer, consulted = self.prior[q], []
         for d in inp.consulted:
-            applied = "RULE" in d.payload or "POISON" in d.payload
+            applied = "RULE" in d.payload or "POISON" in d.payload or d.floor is not None
             if "RULE" in d.payload:
                 answer = self.right[q]
             elif "POISON" in d.payload:
@@ -407,7 +408,8 @@ SCHEMA = SchemaSummary(collections={"customers": {"st": "int"}})
 def episode(idx: int, template: str, *, correct: bool, figure: float, persona: str = "omar",
             question_id: str | None = None, terms: tuple[str, ...] = (TERM,), arm: str = ARM) -> Episode:
     return Episode(_id=f"{RUN}:{arm}:e{idx}", run_id=RUN, arm=arm, idx=idx, question_id=question_id or f"q{idx}",
-                   text=f"How many {TERM} in {template}?", template=template, persona=persona, terms=terms,
+                   text=f"How many {TERM} in {template} for period {idx}?", template=template, persona=persona,
+                   terms=terms,
                    world_version="v0", consulted=(), collection="customers", pipeline=[], answer_path="0.v",
                    view_map={}, answer=figure if correct else figure + PRIOR_OFFSET, confidence=0.5, correct=correct,
                    figure=None if correct else figure, phrasing=None, confirmed_figure=figure,

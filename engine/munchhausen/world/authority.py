@@ -47,15 +47,19 @@ class Authority:
         q = self._quirk(question)
         return self._abs_tol_rounded if q is not None and q.signature == Signature.ROUNDING else 0.0
 
-    def poison_variant(self, question: Question, idx: int) -> dict[str, Any] | None:
-        """The poison bank entry applied at (seed, idx) for this question, or None (deterministic)."""
+    def poison_index(self, question: Question, idx: int) -> int | None:
+        """The poison bank index applied at (seed, idx) for this question, or None (deterministic)."""
         q = self._quirk(question)
         if q is None or stable_unit(f"poison:{idx}", self._seed) >= self._poison_rate:
             return None
-        variants = [v.params for v in self._pack.poison_bank if v.params.get("quirk") == q.id]
-        if not variants:
+        ks = [k for k, v in enumerate(self._pack.poison_bank) if v.params.get("quirk") == q.id]
+        if not ks:
             return None
-        return variants[stable_bucket(f"poison-variant:{idx}", self._seed) % len(variants)]
+        return ks[stable_bucket(f"poison-variant:{idx}", self._seed) % len(ks)]
+
+    def poison_variant(self, question: Question, idx: int) -> dict[str, Any] | None:
+        k = self.poison_index(question, idx)
+        return None if k is None else dict(self._pack.poison_bank[k].params)
 
     async def _figure(self, question: Question, gold: Answer, idx: int, world_version: str) -> Answer:
         v = self.poison_variant(question, idx)

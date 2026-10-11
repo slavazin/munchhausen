@@ -30,7 +30,8 @@ def register(app: typer.Typer) -> None:
 
     @owner.command("dispose")
     def dispose(target: str, disposition: str, note: str = typer.Option("", help="recorded with the disposition"),
-                at_idx: int | None = typer.Option(None, help="admission index; default: the arm's cursor")) -> None:
+                at_idx: int | None = typer.Option(None, help="admission index; default: the last round close")
+                ) -> None:
         """Dispose a draft (admit|refuse) or a fire (applied|rejected|deferred) as the owner."""
         async def go() -> Any:
             from munchhausen.bootstrap import harness
@@ -46,7 +47,11 @@ def register(app: typer.Typer) -> None:
                 draft = await store.drafts.get(target)
                 if draft is None:
                     raise typer.BadParameter(f"{target} is neither a fire nor a draft")
-                idx = at_idx if at_idx is not None else (await store.cursors.get(draft.run_id, draft.arm)).next_idx
+                if at_idx is not None:
+                    idx = at_idx
+                else:   # the last round close, never mid-round: admissions land at round boundaries
+                    nxt = (await store.cursors.get(draft.run_id, draft.arm)).next_idx
+                    idx = (nxt // h.settings.round_size) * h.settings.round_size
                 rec = await adjudicator_for(h, draft.arm).owner_dispose_draft(target, Verdict(disposition), idx, note)
                 return {"draft": target, "status": rec.status.value, "disposer": "owner", "at_idx": idx}
             finally:

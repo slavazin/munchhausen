@@ -168,6 +168,7 @@ class Decision(EntryContract, Record):
     amendments: tuple[Amendment, ...] = ()
     rep: Representation | None = None
     emb: dict[str, list[float]] = Field(default_factory=dict)   # emb.<embedder_id> (SPEC § 21, E10)
+    admitted_at_idx: int | None = None   # the admission index; `lifecycle.at_idx` moves on every flip
 
     @property
     def is_admitted(self) -> bool:

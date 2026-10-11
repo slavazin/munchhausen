@@ -12,16 +12,23 @@ operator's figure, so a miss-rate gap would read the injection, not the world. T
 under `adjudication["bar"]`. The backtest still replays the case store's stream episodes against their
 confirmed figures, which is where a false figure is refused.
 
-Injection episodes are written with `stream="injection"` and a negative `idx` (the next free one; the
-stream's indices are ≥ 0 and `episodes` is unique on run/arm/idx), so no stream reading, curve or backtest
-population counts them. The draft and its curation context carry the arm's current stream index.
-Their `correct` is scored against the operator's figure and means nothing else.
+Injection episodes are written with `stream="injection"` and the next free `idx` at or below
+INJECT_IDX_BASE (stream indices are ≥ 0, V indices are -(1 + k·V_SIZE + j), and `episodes` is unique on
+run/arm/idx), so no stream reading, curve or backtest population counts them. Each forward pass runs at the
+arm's current stream index (`at_idx`), so `world_version` is right after a drift. Their `correct` is scored
+against the operator's figure and means nothing else.
+
+Containment: the draft carries `source="injection"`; every exit (hold, refuse, admit, failure) marks the
+injection's observations `spent`, disposed by the job; the organic episodic pass never opens `via=injection`
+observations (`open_for_pass` excludes them); the proposer's spend is recorded under INJECT_STAGE (rounds
+exclude it). Residue: the observer, nominator and backtest replays record spend under their own stages.
 
 Application layer: ports and application services only (no store, impl or world imports).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -32,7 +39,7 @@ from munchhausen.domain.common import Answer, LayerRole
 from munchhausen.domain.decision import Decision
 from munchhausen.domain.draft import Draft, LayerOutcome, Shape, Verdict
 from munchhausen.domain.episode import Episode, Judgement
-from munchhausen.domain.ids import backtest_id, observation_id, shape_id
+from munchhausen.domain.ids import backtest_id, observation_id
 from munchhausen.domain.observation import (
     Observation,
     ObservationClass,
@@ -43,8 +50,9 @@ from munchhausen.domain.observation import (
 )
 from munchhausen.domain.question import Question, SchemaSummary
 from munchhausen.domain.scoring import matches, ratio_delta
-from munchhausen.learn.episodic import Bar, coherence_guard
+from munchhausen.learn.episodic import Bar, coherence_guard, shape_of
 from munchhausen.ports.curation import Adjudicator, CurationContext
+from munchhausen.ports.sinks import Trace
 from munchhausen.ports.store import (
     BacktestRepository,
     CursorRepository,
@@ -60,7 +68,8 @@ DIRECTION_SKIPPED = {"direction_read": "skipped",
 
 
 class ForwardRunner(Protocol):
-    async def run(self, idx: int, question: Question, *, stream: str = "stream") -> Episode: ...
+    async def run(self, idx: int, question: Question, *, stream: str = "stream",
+                  at_idx: int | None = None) -> Episode: ...
 
 
 class NominationLike(Protocol):
@@ -75,25 +84,6 @@ class ShapeNominator(Protocol):
                        members: Sequence[Observation]) -> NominationLike: ...
 
 
-def _norm(term: str) -> str:
-    return " ".join(term.lower().split())
-
-
-def _shape_of(members: Sequence[Observation]) -> Shape:
-    """Fallback identical to `learn/episodic.shape_of` (S3), used only until that lands in this tree."""
-    ids = tuple(sorted(o.id for o in members))
-    term_sets = [{_norm(t) for t in o.surfaces.terms} for o in members]
-    return Shape(id=shape_id(ids), observation_ids=ids, episode_ids=tuple(sorted({o.episode_id for o in members})),
-                 templates=frozenset(o.template for o in members), personas=frozenset(o.persona for o in members),
-                 terms=frozenset(set.intersection(*term_sets)) if term_sets else frozenset())
-
-
-try:   # one definition of a shape for the pass and the injection (S3 owns it)
-    from munchhausen.learn.episodic import shape_of  # type: ignore[attr-defined]
-except ImportError:   # pragma: no cover - until S3 merges
-    shape_of = _shape_of
-
-
 Observe = Callable[[Episode], Awaitable[list[ObservationNote]]]
 Step = Callable[[str, dict[str, Any]], Any]
 
@@ -106,6 +96,7 @@ class InjectionRequest:
     figure: Answer
     phrasing: str
     per_template: int
+    job_id: str = ""                    # disposer of the injection's observations on every exit
 
 
 @dataclass(frozen=True)
@@ -113,6 +104,8 @@ class InjectParams:
     seed: int
     scan_max: int
     rel_tol: float
+    idx_base: int = -1_000_000          # INJECT_IDX_BASE
+    max_templates: int = 3              # INJECT_MAX_TEMPLATES
 
 
 class InjectedWorld:
@@ -234,9 +227,37 @@ def injection_shape(observations: Sequence[Observation]) -> Shape:
     return shape_of(observations).model_copy(update={"source": INJECTION_STREAM})
 
 
-def mark_direction_skipped(draft: Draft) -> Draft:
-    skip = LayerOutcome(layer="bar", role=None, verdict=Verdict.PASS, detail=DIRECTION_SKIPPED)
-    return draft.model_copy(update={"adjudication": {**draft.adjudication, "bar": skip}})
+SKIP_OUTCOME = LayerOutcome(layer="bar", role=None, verdict=Verdict.PASS, detail=DIRECTION_SKIPPED)
+
+
+def mark_injection(draft: Draft) -> Draft:
+    """`source="injection"` and the direction-read skip, recorded on the draft before adjudication."""
+    return draft.model_copy(update={"adjudication": {**draft.adjudication, "bar": SKIP_OUTCOME},
+                                    "source": INJECTION_STREAM})
+
+
+def capped_templates(templates: Sequence[str], cap: int) -> tuple[str, ...]:
+    """Distinct templates in the operator's order, at most `cap` (each costs forward passes and replays)."""
+    out = tuple(dict.fromkeys(t for t in templates if t))
+    if not out:
+        raise ValueError("choose at least one template")
+    if len(out) > cap:
+        raise ValueError(f"at most {cap} templates per injection (INJECT_MAX_TEMPLATES); got {len(out)}")
+    return out
+
+
+class InjectionModels:
+    """The Models port with the proposer's spend recorded under the injection stage (`ProposerInput.stage`).
+    Every other method delegates unchanged."""
+
+    def __init__(self, base: Any, stage: str) -> None:
+        self._base, self._stage = base, stage
+
+    async def propose(self, inp: Any) -> Any:
+        return await self._base.propose(dataclasses.replace(inp, stage=self._stage))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base, name)
 
 
 @dataclass
@@ -253,25 +274,44 @@ class Injector:
     bar: Bar
     params: InjectParams
     observe: Observe | None = None                  # the observer party; None: mechanical noticing only
+    trace: Trace | None = None
 
     async def _free_idx(self, req: InjectionRequest) -> int:
-        """`episodes` is unique on (run_id, arm, idx), and stream indices are ≥ 0: injection episodes take
-        the next free negative index, so they never collide with the stream or with each other."""
-        idx = -1
+        idx = self.params.idx_base
         while await self.episodes.exists(req.run_id, req.arm, idx):
             idx -= 1
         return idx
 
+    def _event(self, name: str, payload: dict[str, Any]) -> None:
+        if self.trace is not None:
+            self.trace.event(name, payload)
+
     async def run(self, req: InjectionRequest, on_step: Step | None = None) -> InjectionResult:
+        req = dataclasses.replace(req, templates=capped_templates(req.templates, self.params.max_templates))
+        res = InjectionResult(request=req)
+        self._event("injection.started", {"job": req.job_id, "run_id": req.run_id, "arm": req.arm,
+                                          "templates": list(req.templates), "per_template": req.per_template})
+        try:
+            return await self._run(req, res, on_step)
+        finally:
+            # containment on every exit: injected evidence is spent, by this job, whatever the verdict
+            ids = [o.id for o in res.observations]
+            if ids:
+                await self.observations.dispose(ids, ObservationDisposition.SPENT, by=f"injection:{req.job_id}")
+            self._event("injection.finished", {"job": req.job_id, "arm": req.arm,
+                                               "draft_id": res.draft.id if res.draft else None,
+                                               "verdict": res.backtest.verdict.value if res.backtest else None,
+                                               "stopped": res.stopped, "observations": ids})
+
+    async def _run(self, req: InjectionRequest, res: InjectionResult, on_step: Step | None) -> InjectionResult:
         async def step(name: str, **payload: Any) -> None:
             if on_step is not None:
                 r = on_step(name, payload)
                 if inspect.isawaitable(r):
                     await r
 
-        res = InjectionResult(request=req)
         cursor = await self.cursors.get(req.run_id, req.arm)
-        at_idx, round_ = cursor.next_idx, cursor.round
+        at_idx, round_ = (0, 0) if cursor is None else (cursor.next_idx, cursor.round)
         res.questions = pick_questions(self.world, req.templates, req.per_template,
                                        seed=self.params.seed, scan_max=self.params.scan_max)
         await step("questions", questions=[{"id": q.id, "template": q.template, "text": q.text}
@@ -279,7 +319,7 @@ class Injector:
 
         forward = self.forward_for(InjectedWorld(self.world, req.figure, req.phrasing, self.params.rel_tol))
         for q in res.questions:
-            ep = await forward.run(await self._free_idx(req), q, stream=INJECTION_STREAM)
+            ep = await forward.run(await self._free_idx(req), q, stream=INJECTION_STREAM, at_idx=at_idx)
             res.episodes.append(ep)
             await step("episode", id=ep.id, template=ep.template, answer=ep.answer, correct=ep.correct)
 
@@ -308,7 +348,7 @@ class Injector:
             res.stopped = "the coherence guard split the observations into nothing"
             await step("done", **res.summary())
             return res
-        res.shape = max(shapes, key=lambda s: len(s.observation_ids)).model_copy(update={"source": INJECTION_STREAM})
+        res.shape = max(shapes, key=lambda x: len(x.observation_ids)).model_copy(update={"source": INJECTION_STREAM})
         members = [o for o in res.observations if o.id in set(res.shape.observation_ids)]
         res.bar_cleared = self.bar.clears(res.shape, members)
         await step("shape", id=res.shape.id, templates=sorted(res.shape.templates), terms=sorted(res.shape.terms),
@@ -319,9 +359,8 @@ class Injector:
             await step("done", **res.summary())
             return res
 
-        # dispositions follow the episodic pass (S3): shaped on draft write; spent on admit/refuse; open on hold
         nom = await self.nominator.nominate(req.run_id, req.arm, round_, res.shape, members)
-        draft = mark_direction_skipped(nom.draft)
+        draft = mark_injection(nom.draft)
         await self.drafts.put(draft)
         await self.observations.dispose(res.shape.observation_ids, ObservationDisposition.SHAPED, by=draft.id)
         res.draft = draft
@@ -331,11 +370,7 @@ class Injector:
         ctx = CurationContext(run_id=req.run_id, arm=req.arm, at_idx=at_idx, sources=tuple(members),
                               neighbours=tuple(nom.neighbours))
         res.outcomes = list(await self.adjudicator.adjudicate(draft, ctx))
-        final = res.outcomes[-1].verdict if res.outcomes else None
-        if final is Verdict.HOLD:
-            await self.observations.dispose(res.shape.observation_ids, ObservationDisposition.OPEN, by=draft.id)
-        elif final in (Verdict.ADMIT, Verdict.REFUSE):
-            await self.observations.dispose(res.shape.observation_ids, ObservationDisposition.SPENT, by=draft.id)
+        await self.drafts.record(draft.id, SKIP_OUTCOME)   # the adjudicator rewrites `adjudication`
         await step("adjudicated", outcomes=[o.model_dump(mode="json") for o in res.outcomes])
         res.backtest = await self.backtests.get(backtest_id(draft.id))
         if res.backtest is None:

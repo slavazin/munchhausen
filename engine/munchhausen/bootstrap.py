@@ -108,14 +108,16 @@ class Harness:
                              similarity=self.port(arm, "similarity"), reranker=self.port(arm, "reranker"),
                              top_k=s.naive_top_k, budget_tokens=s.context_budget_tokens)
 
-    def forward_pass(self, arm: str, world: Any | None = None) -> Any:
+    def forward_pass(self, arm: str, world: Any | None = None, models: Any | None = None) -> Any:
+        """`models` (additive, S6): the injection passes a stage-tagging wrapper so its proposer spend is
+        recorded under INJECT_STAGE; None keeps the run's models."""
         from munchhausen.agent.proposer import Proposer
         from munchhausen.loop.episode import ForwardParams, ForwardPass
 
         s = self.settings
         return ForwardPass(
             run_id=s.run_id, arm=self.arms[arm], world=world or self.world(), store=self.store,
-            consulter=self.consulter(arm), proposer=Proposer(self.models()), trace=self.trace(),
+            consulter=self.consulter(arm), proposer=Proposer(models or self.models()), trace=self.trace(),
             params=ForwardParams(max_time_ms=s.execute_max_time_ms, rel_tol=s.score_rel_tol,
                                  propose_attempts=s.propose_attempts, rounding_base=s.rounding_unit_base,
                                  fire_fetch_factor=s.fire_fetch_factor))

@@ -1,21 +1,24 @@
-"""Planted-truth readout (SPEC § 11): evaluation only, outside the loop. A judge (the `Models.planted_map`
-party, Opus) given the pack's definitions maps each admitted decision to a quirk id or none. Readings over
-the map (quirk recall, N1 admitted, P1 at org scope) live in `metrics/readings.py`.
+"""Planted-truth readout (SPEC § 11): evaluation only, outside the loop. A judge (the planted-map party) given
+the pack's definitions maps each admitted decision — and each backtested draft, for the § 12 premise join — to
+a quirk id or none. Readings over the map live in `metrics/readings.py`.
 
-Population: every record in `decisions` for the run (admitted at some index, whatever its lifecycle since).
+Failures are per subject: the primary model is tried, then the fallback model; a subject both fail on gets no
+row and is counted in the result (`failed`), never coerced to none. Rows are persisted as they arrive, so an
+interrupted map keeps what it read.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from munchhausen.domain.decision import Decision
 from munchhausen.domain.registers import PlantedMapping
 
-Judge = Callable[[Decision], Awaitable[str | None]]
+Judge = Callable[[Any, str], Awaitable[str | None]]       # (subject, model) → quirk id or None
+Sink = Callable[[PlantedMapping], Awaitable[None]]
 
 
 def pack_definitions(quirks: Iterable[Any]) -> str:
@@ -29,21 +32,42 @@ def pack_definitions(quirks: Iterable[Any]) -> str:
     return "\n".join(lines)
 
 
-def scope_of(decision: Decision) -> str:
-    return "persona" if decision.hook.fires_when.persona is not None else "org"
+def scope_of(subject: Any) -> str:
+    return "persona" if subject.hook.fires_when.persona is not None else "org"
 
 
-async def planted_map(decisions: Sequence[Decision], judge: Judge, quirk_ids: Iterable[str], *, model: str,
-                      concurrency: int) -> list[PlantedMapping]:
-    """Map each decision. A judge answer outside the pack's ids is recorded as none (never coerced)."""
+@dataclass
+class MapResult:
+    mapped: list[PlantedMapping] = field(default_factory=list)
+    failed: dict[str, str] = field(default_factory=dict)      # subject id → last error class
+    by_model: dict[str, int] = field(default_factory=dict)
+
+
+async def planted_map(subjects: Sequence[tuple[str, Any]], judge: Judge, quirk_ids: Iterable[str], *,
+                      models: Sequence[str], concurrency: int, sink: Sink) -> MapResult:
+    """`subjects` = [(kind, record)], kind `decision` or `draft`. A judge answer outside the pack's ids is
+    recorded as none. Each row is handed to `sink` as soon as it is read."""
     known = set(quirk_ids)
     sem = asyncio.Semaphore(concurrency)
+    res = MapResult()
 
-    async def one(d: Decision) -> PlantedMapping:
-        async with sem:
-            q = await judge(d)
-        return PlantedMapping(_id=f"PM-{d.id}", run_id=d.run_id, arm=d.arm, decision_id=d.id,
-                              quirk=q if q in known else None, scope=scope_of(d), model=model,  # type: ignore[arg-type]
-                              at=datetime.now(UTC))
+    async def one(kind: str, subj: Any) -> None:
+        last = ""
+        for model in models:
+            try:
+                async with sem:
+                    q = await judge(subj, model)
+            except Exception as e:  # noqa: BLE001 - one subject's failure never stops the map
+                last = type(e).__name__
+                continue
+            row = PlantedMapping(_id=f"PM-{subj.id}", run_id=subj.run_id, arm=subj.arm, decision_id=subj.id,
+                                 quirk=q if q in known else None, scope=scope_of(subj),  # type: ignore[arg-type]
+                                 model=model, at=datetime.now(UTC), subject=kind)
+            await sink(row)
+            res.mapped.append(row)
+            res.by_model[model] = res.by_model.get(model, 0) + 1
+            return
+        res.failed[subj.id] = last
 
-    return list(await asyncio.gather(*(one(d) for d in decisions)))
+    await asyncio.gather(*(one(k, s) for k, s in subjects))
+    return res

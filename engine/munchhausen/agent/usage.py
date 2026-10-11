@@ -24,3 +24,5 @@ class EpisodeUsage:
 
 
 CURRENT_EPISODE: ContextVar[EpisodeUsage | None] = ContextVar("munchhausen_current_episode", default=None)
+# The episode id alone, under the name the shared call path looks up (`models_anthropic.current_episode_id`).
+CURRENT_EPISODE_ID: ContextVar[str | None] = ContextVar("current_episode_id", default=None)

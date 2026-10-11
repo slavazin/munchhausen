@@ -58,6 +58,20 @@ templates:
     args: {kind: sell}
     params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
              year: [2008, 2010, 2012, 2014, 2016]}
+  # Dana's controls need figures that vary and sit under ~1M, so rounding to the thousand is visible at
+  # SCORE_REL_TOL (review 2026-10-11: avg_limit_product and accounts_limit_at_least round to constants).
+  - id: shares_sold_month
+    text: "How many shares were sold in {month_name} {year}?"
+    collections: [transactions]
+    measure: trades_amount_sum
+    args: {kind: sell}
+    params: {month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], year: [2005, 2008, 2010, 2012]}
+  - id: sell_trades_since
+    text: "How many sell trades were made from {year_from} onward?"
+    collections: [transactions]
+    measure: trades_count
+    args: {kind: sell}
+    params: {year_from: [2008, 2010, 2012, 2014, 2015, 2016]}
 
   # --- Q6 tech names (sells only, never revenue: Q3's removed batches hold buys only) ---------------
   - id: tech_sell_trades_year
@@ -98,10 +112,10 @@ templates:
     measure: customers_count
     args: {active: true}
     params: {product: [Derivatives, InvestmentStock, CurrencyService, Commodity, Brokerage, InvestmentFund]}
-  - id: active_avg_accounts
-    text: "On average, how many accounts does an active customer born before {born_before} have?"
+  - id: active_accounts_held        # monotone in the active set: every Q1 template moves one way at D1
+    text: "How many accounts do active customers born before {born_before} hold in total?"
     collections: [customers]
-    measure: customers_avg_accounts
+    measure: customers_accounts_held
     args: {active: true}
     params: {born_before: [1975, 1980, 1985, 1990, 1995, 2000]}
   - id: active_limit_total
@@ -168,11 +182,12 @@ quirks:
       params: {collection: customers, field: st, key: username, codes: [1, 2, 4, 7],
                shares: [0.50, 0.20, 0.15, 0.15]}
     gold: {transform: in_set, params: {slot: active_customer, field: st, values: [2, 7]}}
+    convention: {transform: in_set, params: {slot: active_customer, field: st, values: [1, 2, 4, 7]}}
     signature: set_member
-    templates: [active_born_from, active_with_product, active_avg_accounts, active_limit_total]
-    authority_phrasings:
+    templates: [active_born_from, active_with_product, active_accounts_held, active_limit_total]
+    authority_phrasings:              # neutral: none implies a direction (D1 reverses who is missing)
       - "that's not how we count active customers"
-      - "finance means something narrower by an active customer"
+      - "finance defines an active customer differently"
       - "your active-customer population doesn't match the one we report"
     definition: "A customer is active when st is 2 or 7."
     weight: 2.0                # the story's quirk: drawn twice as often as each other quirk
@@ -188,12 +203,13 @@ quirks:
                decoy_share: 0.06, decoy_from: bucket_end_date, items: transactions,
                kind_field: transaction_code, keep_kind: buy, count_field: transaction_count}
     gold: {transform: exclude_value, params: {slot: bucket_kept, field: rs, value: 3}}
+    convention: {transform: keep_null, params: {slot: bucket_kept, field: deleted_at}}
     signature: exclusion
     templates: [buy_trades_year, trades_symbol_year, shares_bought_symbol, batches_with_symbol]
     authority_phrasings:
-      - "some of those batches were taken off the books"
-      - "that includes records the ledger no longer carries"
-      - "you're counting transaction batches that were withdrawn"
+      - "that's not how we treat withdrawn transaction batches"
+      - "the ledger's view of which batches are live differs from yours"
+      - "your batches don't match the ones the ledger carries"
     definition: "Batches with rs = 3 are removed and excluded; deleted_at is legacy and those batches count."
 
   - id: Q5_revenue
@@ -201,6 +217,8 @@ quirks:
     prior_trap: revenue is the sum of every trade's total
     gold: {transform: net_of_fee, params: {kind_field: transaction_code, kind: sell, amount_field: total,
                                            factor: 0.995}}
+    convention: {transform: net_of_fee, params: {kind_field: transaction_code, kind: null, amount_field: total,
+                                                 factor: 1.0}}
     signature: ratio
     templates: [revenue_year, revenue_symbol, revenue_symbol_year, revenue_month]
     authority_phrasings:
@@ -216,6 +234,8 @@ quirks:
     # nflx nvda sap team znga). Members exclude aapl, msft, goog, amzn, fb; znga and team are non-obvious.
     gold: {transform: in_set, params: {slot: tech_symbol, field: symbol,
                                        values: [adbe, amd, crm, csco, intc, nvda, team, znga]}}
+    convention: {transform: in_set, params: {slot: tech_symbol, field: symbol,
+                                             values: [aapl, msft, goog, amzn, fb]}}
     signature: set_member
     templates: [tech_sell_trades_year, tech_shares_sold_year, tech_sell_share_month, tech_sellers_year]
     authority_phrasings:
@@ -230,7 +250,7 @@ quirks:
     prior_trap: figures are quoted exactly for everyone
     gold: {transform: round_to, params: {unit: 1000}}
     signature: rounding
-    templates: [sell_trades_year, shares_sold_symbol_year, avg_limit_product, accounts_limit_at_least]
+    templates: [sell_trades_year, shares_sold_symbol_year, shares_sold_month, sell_trades_since]
     authority_phrasings:
       - "that's not how Dana likes her figures"
       - "Dana never quotes numbers like that"
@@ -241,10 +261,12 @@ quirks:
     kind: poison
     prior_trap: ""
 
+# Each variant differs from gold and from the prior trap's figure (tests/test_gold_isolation.py), so a
+# poisoned figure never confirms the convention the proposer already holds.
 poison_bank:               # N1: a figure from a stale variant, labelled like a genuine one
-  - {transform: variant_gold, params: {quirk: Q5_revenue, factor: 1.0}}            # revenue without the fee
+  - {transform: variant_gold, params: {quirk: Q5_revenue, factor: 1.0}}            # sells without the fee
   - {transform: variant_gold, params: {quirk: Q1_active_customer, values: [1, 2, 7]}}  # active incl st=1
-  - {transform: variant_gold, params: {quirk: Q3_soft_delete, value: null}}        # removed batches counted
-  - {transform: variant_gold, params: {quirk: P1_dana_rounding, unit: 1}}          # unrounded
-  - {transform: variant_gold, params: {quirk: Q6_tech_names,                       # the conventional set
-                                       values: [aapl, msft, goog, amzn, fb, nvda, intc, csco]}}
+  - {transform: variant_gold, params: {quirk: Q3_soft_delete, value: 2}}           # the wrong code excluded
+  - {transform: variant_gold, params: {quirk: P1_dana_rounding, unit: 10000}}      # the wrong rounding
+  - {transform: variant_gold, params: {quirk: Q6_tech_names,                       # a stale list (+aapl, msft)
+                                       values: [adbe, amd, crm, csco, intc, nvda, team, znga, aapl, msft]}}

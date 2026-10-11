@@ -75,6 +75,8 @@ class Context:
     premise_first: int
     premise_share: float
     forecasts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    rolling_window: int = 90                   # PAIRED_ROLLING_WINDOW
+    notes: tuple[str, ...] = ()                # context caveats printed at the top of the report (e.g. pack hash)
 
 
 # --- row helpers ------------------------------------------------------------------------------------------
@@ -122,17 +124,17 @@ def quirk_matches(qid: str | None, prefix: str) -> bool:
 
 
 def stream_curve(rows: Mapping[str, list[Row]], ctx: Context, arm: str) -> list[dict[str, Any]]:
-    """Per round: n, stream accuracy, self-assessed accuracy, calibration gap (stream episodes)."""
+    """Per round: n scored, n errored, stream accuracy, self-assessed accuracy, calibration gap."""
     by_round: dict[int, list[Row]] = defaultdict(list)
     for e in stream_of(rows, arm):
         by_round[e["idx"] // ctx.round_size].append(e)
     out = []
     for r in sorted(by_round):
-        es = by_round[r]
+        es = [e for e in by_round[r] if not errored(e)]
         acc = _mean([1.0 if e.get("correct") else 0.0 for e in es])
         conf = _mean([float(e.get("confidence", 0.0)) for e in es])
         out.append({"round": r, "idx_lo": r * ctx.round_size, "idx_hi": (r + 1) * ctx.round_size - 1, "n": len(es),
-                    "acc": acc, "conf": conf, "gap": conf - acc})
+                    "n_error": len(by_round[r]) - len(es), "acc": acc, "conf": conf, "gap": conf - acc})
     return out
 
 
@@ -147,28 +149,44 @@ def v_points(rows: Mapping[str, list[Row]], arm: str) -> list[dict[str, Any]]:
 
 
 def arm_summary(rows: Mapping[str, list[Row]], ctx: Context, arm: str) -> list[Reading]:
-    es = stream_of(rows, arm)
-    n = len(es)
-    pop = f"stream episodes of arm {arm}"
+    all_ = stream_of(rows, arm)
+    es = [e for e in all_ if not errored(e)]
+    n, n_err = len(es), len(all_) - len(es)
+    pop = f"stream episodes of arm {arm} without error ({n_err} errored excluded)"
+    q = q_find("episodes", f"arm: '{arm}', stream: 'stream', error: null", "arm_summary")
     acc = _mean([1.0 if e.get("correct") else 0.0 for e in es])
     gap = _mean([_gap(e) for e in es])
     return [
-        Reading(f"{arm}.stream_accuracy", acc, "accuracy (fraction)", pop, n,
-                q_find("episodes", f"arm: '{arm}', stream: 'stream'", "arm_summary")),
-        Reading(f"{arm}.calibration_gap", gap, "accuracy points (mean confidence − accuracy)", pop, n,
-                q_find("episodes", f"arm: '{arm}', stream: 'stream'", "arm_summary")),
+        Reading(f"{arm}.stream_accuracy", acc, "accuracy (fraction)", pop, n, q),
+        Reading(f"{arm}.calibration_gap", gap, "accuracy points (mean confidence − accuracy)", pop, n, q),
+        Reading(f"{arm}.errored_episodes", n_err, "episodes", f"stream episodes of arm {arm}", len(all_),
+                q_find("episodes", f"arm: '{arm}', stream: 'stream', error: {{$ne: null}}", "arm_summary")),
     ]
 
 
 # --- paired readings (F5, F6) -----------------------------------------------------------------------------
 
 
-def _pairs(rows: Mapping[str, list[Row]], a: str, b: str, keep: Any) -> tuple[list[float], list[float], list[int]]:
+def _pairs(rows: Mapping[str, list[Row]], a: str, b: str, keep: Any
+           ) -> tuple[list[float], list[float], list[int], dict[str, int]]:
+    """Pairs on `idx` where neither side has `error` and both answered the same `question_id`. Returns the
+    dropped counts: errors per arm and question mismatches."""
     ea = {e["idx"]: e for e in stream_of(rows, a) if keep(e)}
     eb = {e["idx"]: e for e in stream_of(rows, b) if keep(e)}
-    idx = sorted(ea.keys() & eb.keys())
+    common = sorted(ea.keys() & eb.keys())
+    drop = {f"error.{a}": 0, f"error.{b}": 0, "question_mismatch": 0}
+    idx = []
+    for i in common:
+        if errored(ea[i]) or errored(eb[i]):
+            drop[f"error.{a}"] += int(errored(ea[i]))
+            drop[f"error.{b}"] += int(errored(eb[i]))
+            continue
+        if ea[i].get("question_id") != eb[i].get("question_id"):
+            drop["question_mismatch"] += 1
+            continue
+        idx.append(i)
     return ([1.0 if ea[i].get("correct") else 0.0 for i in idx], [1.0 if eb[i].get("correct") else 0.0 for i in idx],
-            idx)
+            idx, drop)
 
 
 def paired_accuracy(rows: Mapping[str, list[Row]], ctx: Context, a: str, b: str, *, population: str,
@@ -185,22 +203,25 @@ def paired_accuracy(rows: Mapping[str, list[Row]], ctx: Context, a: str, b: str,
     else:
         keep = lambda e: e["idx"] >= after_idx  # noqa: E731
         pop = f"stream questions with idx ≥ {after_idx}, paired by idx"
-    xa, xb, _ = _pairs(rows, a, b, keep)
+    xa, xb, _, drop = _pairs(rows, a, b, keep)
     pr = paired_difference(xa, xb, n_boot=ctx.bootstrap_n, level=ctx.ci_level, seed=ctx.seed)
-    return _paired_reading(f"paired_accuracy.{a}-{b}", pr, "accuracy (fraction)", pop,
+    return _paired_reading(f"paired_accuracy.{a}-{b}", pr, "accuracy (fraction)", pop + ", same question_id, no error",
                            q_find("episodes", f"arm: {{$in: ['{a}', '{b}']}}, stream: 'stream'",
-                                  f"paired_accuracy(a='{a}', b='{b}', after_round={after_round})")), \
-        verdict3(pr, margin)
+                                  f"paired_accuracy(a='{a}', b='{b}', after_round={after_round})"),
+                           _drop_note(drop)), verdict3(pr, margin)
 
 
 def _paired_reading(name: str, pr: PairedReading, unit: str, pop: str, query: str, note: str | None = None) -> Reading:
     return Reading(name, pr.diff, unit, pop, pr.n, query, interval=(pr.lo, pr.hi), level=pr.level, note=note)
 
 
-def verdict3(pr: PairedReading, margin: float) -> str:
-    """above / within / below the margin; `unread` with no pairs (an empty reading resolves nothing)."""
+def verdict3(pr: PairedReading, margin: float, *, proxy: bool = False) -> str:
+    """above / within / below the margin; `unread` with no pairs; `unread (proxy)` when the reading's
+    population is a proxy (no planted map): a proxy reading never earns an agreement verdict."""
     if pr.n == 0 or math.isnan(pr.diff):
         return "unread"
+    if proxy:
+        return "unread (proxy)"
     return pr.verdict(margin)
 
 
@@ -235,20 +256,21 @@ def pre_drift_holders(rows: Mapping[str, list[Row]], ctx: Context, drift: str, p
 def drift_calibration(rows: Mapping[str, list[Row]], ctx: Context, *, drift: str, prefix: str, reference: str,
                       margin: float) -> list[tuple[Reading, str]]:
     """F1: per holding arm, calibration gap after the drift minus before (two windows of `DRIFT_WINDOW`; the
-    after-window ends at the first supersession of a held decision), with the reference arm's
-    difference-in-differences paired by idx beside it."""
+    after-window ends at the first supersession or retirement of a held decision — a converge does not end
+    holding), with the reference arm's difference-in-differences paired by idx beside it. Errored episodes are
+    excluded. Without a planted map the holders are a proxy and the verdict is `unread (proxy)`."""
     at, _ = _drift(ctx, drift)
     holders, proxy = pre_drift_holders(rows, ctx, drift, prefix)
     w = ctx.drift_window
     out: list[tuple[Reading, str]] = []
-    ref = {e["idx"]: _gap(e) for e in stream_of(rows, reference)} if reference in ctx.arms else {}
+    ref = {e["idx"]: _gap(e) for e in scored_of(rows, reference)} if reference in ctx.arms else {}
     for arm in ctx.arms:
         if arm not in holders:
             continue
         ends = [int(d["lifecycle"]["at_idx"]) for d in holders[arm]
-                if d.get("lifecycle", {}).get("status") != "admitted"]
+                if d.get("lifecycle", {}).get("status") in ("superseded", "retired")]
         stop = min([at + w, *ends])
-        es = stream_of(rows, arm)
+        es = scored_of(rows, arm)
         before = [e for e in es if at - w <= e["idx"] < at]
         after = [e for e in es if at <= e["idx"] < stop]
         pr = difference_of_means([_gap(e) for e in after], [_gap(e) for e in before], n_boot=ctx.bootstrap_n,
@@ -263,74 +285,65 @@ def drift_calibration(rows: Mapping[str, list[Row]], ctx: Context, *, drift: str
         held = ", ".join(d["_id"] for d in holders[arm])
         note = f"held: {held}. " + (dd or f"reference arm {reference} not read") + (
             ". PROXY: no planted map; every decision admitted before the drift counts as held" if proxy else "")
-        pop = (f"stream episodes of arm {arm}: idx {at - w}…{at - 1} (before) vs {at}…{stop - 1} (after); "
-               f"n = smaller window")
+        pop = (f"stream episodes of arm {arm} without error: idx {at - w}…{at - 1} (before) vs {at}…{stop - 1} "
+               f"(after); n = smaller window")
         r = _paired_reading(f"F1.{arm}", pr, "accuracy points (calibration gap, after − before)", pop,
                             q_find("episodes", f"arm: '{arm}', stream: 'stream', idx: {{$gte: {at - w}, $lt: {stop}}}",
                                    f"drift_calibration(drift='{drift}')"), note)
-        out.append((r, verdict3(pr, margin)))
+        out.append((r, verdict3(pr, margin, proxy=proxy)))
     return out
 
 
 def resolution_idx(rows: Mapping[str, list[Row]], ctx: Context, arm: str, *, drift: str, prefix: str
-                   ) -> tuple[int | None, str]:
-    """First index ≥ the drift at which the arm resolves it: a held pre-drift decision is superseded, moot or
-    retired, or (arms that write without supersession) a decision mapped to the drifting quirk is admitted."""
+                   ) -> tuple[int | None, str, bool]:
+    """(index, how, held). The drift is resolved only by a held pre-drift decision `superseded` at or after the
+    drift with a successor present in the store; a converge (a merge) or a retirement is not resolution.
+    `held` False: the arm never held a pre-drift decision on the drifting quirk."""
     at, _ = _drift(ctx, drift)
     holders, proxy = pre_drift_holders(rows, ctx, drift, prefix)
-    cands: list[tuple[int, str]] = []
-    for d in holders.get(arm, []):
+    ids = {d["_id"] for d in rows.get("decisions", [])}
+    held = holders.get(arm, [])
+    tag = " (proxy: no planted map)" if proxy else ""
+    if not held:
+        return None, "never held" + tag, False
+    cands = []
+    for d in held:
         lc = d.get("lifecycle", {})
-        if lc.get("status") != "admitted" and int(lc.get("at_idx", 0)) >= at:
-            cands.append((int(lc["at_idx"]), f"{d['_id']} {lc['status']}"))
-    pm, dr = mapping(rows), drafts_round(rows)
-    if pm:
-        for d in rows.get("decisions", []):
-            if d.get("arm") != arm or not quirk_matches(pm.get(d["_id"], {}).get("quirk"), prefix):
-                continue
-            adm = admitted_idx(d, dr, ctx.round_size)
-            if adm is not None and adm >= at:
-                cands.append((adm, f"{d['_id']} admitted"))
+        if (lc.get("status") == "superseded" and int(lc.get("at_idx", 0)) >= at
+                and lc.get("superseded_by") in ids):
+            cands.append((int(lc["at_idx"]), f"{d['_id']} superseded by {lc['superseded_by']}"))
     if not cands:
-        return None, "unresolved" + (" (proxy: no planted map)" if proxy else "")
+        statuses = ", ".join(f"{d['_id']} {d.get('lifecycle', {}).get('status')}" for d in held)
+        return None, f"held but unresolved ({statuses})" + tag, True
     i, how = min(cands)
-    return i, how + (" (proxy: no planted map)" if proxy else "")
+    return i, how + tag, True
 
 
 def drift_latency(rows: Mapping[str, list[Row]], ctx: Context, *, drift: str, prefix: str, a: str,
                   others: Sequence[str], margin: float) -> list[tuple[Reading, str]]:
-    """F4: latency (resolution idx − drift idx) per arm; difference other − a, verdict by sign beyond the
-    margin. An unresolved arm is censored at its last stream index: its latency is at least that."""
+    """F4: latency (supersession idx − drift idx) per arm; difference other − a, verdict by sign beyond the
+    margin. If either arm did not resolve the drift (never held, or held but unresolved) the comparison is
+    `unread`, with the reason; a proxy (no planted map) is `unread (proxy)`."""
     at, _ = _drift(ctx, drift)
-
-    def lat(arm: str) -> tuple[float, bool, str]:
-        i, how = resolution_idx(rows, ctx, arm, drift=drift, prefix=prefix)
-        if i is not None:
-            return float(i - at), False, how
-        es = stream_of(rows, arm)
-        last = es[-1]["idx"] if es else at
-        return float(max(0, last - at)), True, how
-
-    la, ca, how_a = lat(a)
+    _, proxy = pre_drift_holders(rows, ctx, drift, prefix)
+    ia, how_a, _ = resolution_idx(rows, ctx, a, drift=drift, prefix=prefix)
     out = []
     for o in others:
         if o not in ctx.arms:
             continue
-        lo_, co, how_o = lat(o)
-        d = lo_ - la
-        if not ca and not co:
-            v = "above" if d > margin else "below" if d < -margin else "within"
-        elif not ca and co:      # other unresolved: its latency is at least lo_
-            v = "above" if d > margin else "within"
-        elif ca and not co:      # a unresolved: its latency is at least la
-            v = "below" if d < -margin else "within"
+        io, how_o, _ = resolution_idx(rows, ctx, o, drift=drift, prefix=prefix)
+        la = None if ia is None else ia - at
+        lo_ = None if io is None else io - at
+        if la is None or lo_ is None:
+            d, v = None, "unread"
         else:
-            v = "within"
-        note = (f"{a}: {'≥ ' if ca else ''}{la:.0f} ({how_a}); {o}: {'≥ ' if co else ''}{lo_:.0f} ({how_o}). "
-                "One drift event per arm: no interval.")
-        out.append((Reading(f"F4.{o}-{a}", d, "episodes", f"drift {drift} at idx {at}; arms {o}, {a}", 1,
-                            q_find("decisions", f"arm: {{$in: ['{o}', '{a}']}}",
-                                   f"drift_latency(drift='{drift}')"), note=note), v))
+            d = float(lo_ - la)
+            v = "unread (proxy)" if proxy else "above" if d > margin else "below" if d < -margin else "within"
+        note = (f"{a}: {la if la is not None else '—'} ({how_a}); {o}: {lo_ if lo_ is not None else '—'} ({how_o}). "
+                "One drift event per arm: no interval")
+        out.append((Reading(f"F4.{o}-{a}", d, "episodes", f"drift {drift} at idx {at}; arms {o}, {a}",
+                            int(d is not None), q_find("decisions", f"arm: {{$in: ['{o}', '{a}']}}",
+                                                       f"drift_latency(drift='{drift}')"), note=note), v))
     return out
 
 
@@ -348,7 +361,7 @@ def stale_applied(rows: Mapping[str, list[Row]], ctx: Context, *, drift: str, pr
             continue
         starts = {d["_id"]: max(at, (admitted_idx(d, dr, ctx.round_size) or 0) + ctx.label_horizon) for d in held}
         first = min(starts.values())
-        es = [e for e in stream_of(rows, arm) if e["idx"] >= first
+        es = [e for e in scored_of(rows, arm) if e["idx"] >= first
               and (not ctx.template_quirk or ctx.template_quirk.get(e.get("template")) == quirk)]
         stale = sum(1 for e in es if any(c.get("disposition") == "applied" and c.get("decision_id") in starts
                                          and e["idx"] >= starts[c["decision_id"]] for c in e.get("consulted", [])))
@@ -366,7 +379,7 @@ def stale_applied(rows: Mapping[str, list[Row]], ctx: Context, *, drift: str, pr
 
 def planted_count(rows: Mapping[str, list[Row]], ctx: Context, *, prefix: str, expect: Mapping[str, Mapping[str, int]]
                   ) -> tuple[list[Reading], str]:
-    pm = mapping(rows)
+    pm = {k: m for k, m in mapping(rows).items() if m.get("subject", "decision") == "decision"}
     if not pm:
         return [Reading(f"planted_count.{prefix}", None, "decisions", "unread", 0,
                         q_find("planted_map", "", "planted_count"), note="planted map not run")], "unread"
@@ -381,12 +394,15 @@ def planted_count(rows: Mapping[str, list[Row]], ctx: Context, *, prefix: str, e
         e = expect.get(arm, {})
         if ("max" in e and c > e["max"]) or ("min" in e and c < e["min"]):
             ok = False
+    missing = sorted(set(expect) - set(ctx.arms))
+    if missing:
+        return out, "unread"
     return out, "agrees" if ok else "disagrees"
 
 
 def planted_scope(rows: Mapping[str, list[Row]], ctx: Context, *, prefix: str, expect: Mapping[str, Sequence[str]]
                   ) -> tuple[list[Reading], str]:
-    pm = mapping(rows)
+    pm = {k: m for k, m in mapping(rows).items() if m.get("subject", "decision") == "decision"}
     if not pm:
         return [Reading(f"planted_scope.{prefix}", None, "decisions", "unread", 0,
                         q_find("planted_map", "", "planted_scope"), note="planted map not run")], "unread"
@@ -399,6 +415,8 @@ def planted_scope(rows: Mapping[str, list[Row]], ctx: Context, *, prefix: str, e
                            q_find("planted_map", f"arm: '{arm}'", f"planted_scope(prefix='{prefix}')")))
         if arm in expect and not set(held) <= set(expect[arm]):
             ok = False
+    if set(expect) - set(ctx.arms):
+        return out, "unread"
     return out, "agrees" if ok else "disagrees"
 
 
@@ -420,39 +438,53 @@ def quirk_recall(rows: Mapping[str, list[Row]], ctx: Context) -> list[Reading]:
 
 
 def backtest_summary(rows: Mapping[str, list[Row]], ctx: Context) -> list[Reading]:
-    """Per arm with backtests: admit rate, fixed/broken distributions, and the § 12 premise over the first
-    `BACKTEST_PREMISE_FIRST` backtests (ordered by draft round): share of samples whose baseline replay missed
-    that the replay with the draft fixed. Proxy for 'misses whose quirk the draft encodes': drafts are not
-    mapped to quirks, so every baseline miss in the sample counts."""
+    """Per arm with organic backtests (drafts whose `source` is `injection` are excluded and counted
+    elsewhere): admit rate, fixed/broken distributions, and the § 12 premise over the first
+    `BACKTEST_PREMISE_FIRST` backtests (ordered by draft round): the share of encoded misses — samples whose
+    baseline replay missed on a template of the quirk the draft encodes (planted map of the draft) — that the
+    replay with the draft fixed. A draft without a mapping falls back to every baseline miss, flagged proxy."""
+    drafts = {d["_id"]: d for d in rows.get("drafts", [])}
+    pm = mapping(rows)
     by_arm: dict[str, list[Row]] = defaultdict(list)
     for b in rows.get("backtests", []):
-        by_arm[b["arm"]].append(b)
-    rounds = {d["_id"]: int(d.get("round", 0)) for d in rows.get("drafts", [])}
+        if not _is_injection(drafts.get(b.get("draft_id"), {})):
+            by_arm[b["arm"]].append(b)
     out = []
     for arm in ctx.arms:
-        bts = sorted(by_arm.get(arm, []), key=lambda b: (rounds.get(b.get("draft_id"), 0), b["_id"]))
+        bts = sorted(by_arm.get(arm, []),
+                     key=lambda b: (int(drafts.get(b.get("draft_id"), {}).get("round", 0)), b["_id"]))
         if not bts:
             continue
         n = len(bts)
         admits = sum(1 for b in bts if b.get("verdict") == "admit")
         q = q_find("backtests", f"arm: '{arm}'", "backtest_summary")
         out.append(Reading(f"backtest.admit_rate.{arm}", admits / n, "share of backtests",
-                           f"backtests of arm {arm}", n, q))
+                           f"organic backtests of arm {arm}", n, q))
         for field_ in ("fixed", "broken"):
             hist = dict(sorted(Counter(int(b.get(field_, 0)) for b in bts).items()))
             out.append(Reading(f"backtest.{field_}_hist.{arm}", hist, f"backtests per {field_} count",
-                               f"backtests of arm {arm}", n, q))
+                               f"organic backtests of arm {arm}", n, q))
         first = bts[: ctx.premise_first]
-        misses = [s for b in first for s in b.get("sampled", []) if not s.get("baseline_correct")]
+        misses, proxied = [], 0
+        for b in first:
+            quirk = pm.get(b.get("draft_id"), {}).get("quirk")
+            base = [s for s in b.get("sampled", []) if not s.get("baseline_correct")]
+            if quirk is None or not ctx.template_quirk:
+                proxied += 1
+                misses += base
+            else:
+                misses += [s for s in base if ctx.template_quirk.get(s.get("template")) == quirk]
         fixed = sum(1 for s in misses if s.get("replay_correct"))
         share = fixed / len(misses) if misses else None
-        holds = None if share is None else share >= ctx.premise_share
-        out.append(Reading(f"backtest.premise.{arm}", share, "share of baseline misses fixed",
-                           f"paired-replay samples whose baseline missed, first {len(first)} backtests of arm {arm}",
-                           len(misses), q,
-                           note=(f"§ 12 premise (≥ {ctx.premise_share:.0%}): "
-                                 f"{'holds' if holds else 'fails' if holds is not None else 'unread'}; "
-                                 "proxy population: drafts are not quirk-mapped")))
+        holds = None if share is None or proxied else share >= ctx.premise_share
+        verdict = "holds" if holds else "fails" if holds is not None else ("unread (proxy)" if proxied and misses
+                                                                            else "unread")
+        out.append(Reading(f"backtest.premise.{arm}", share, "share of encoded misses fixed",
+                           f"paired-replay samples whose baseline missed on the draft's quirk, first {len(first)} "
+                           f"organic backtests of arm {arm}", len(misses), q,
+                           note=(f"§ 12 premise (≥ {ctx.premise_share:.0%}): {verdict}"
+                                 + (f"; PROXY for {proxied} of {len(first)} backtests (draft not quirk-mapped): "
+                                    "every baseline miss counted" if proxied else ""))))
     return out
 
 
@@ -483,18 +515,21 @@ def supersession_audit(rows: Mapping[str, list[Row]], ctx: Context) -> list[Read
 
 def retrieval_lead(rows: Mapping[str, list[Row]], ctx: Context) -> list[Reading]:
     """E9 (§ 24.1): for each semantic-consultation arm s and hook-consultation arm h, over quirk-bearing stream
-    indices where h missed and s hit: the share where s applied a decision (mapped to the question's quirk, when
-    a planted map exists) and no hook matched in h. A lower bound on what hooks miss."""
+    indices (same question, no error) where h missed and s hit: the share where s applied a decision (mapped to
+    the question's quirk, when a planted map exists) and no hook matched in h (`matched_ids` empty). A lower
+    bound on what hooks miss. Episodes without `matched_ids` fall back to `consulted`, flagged."""
     pm = mapping(rows)
     sem = [a for a, s in ctx.arms.items() if s.consultation is ConsultationMode.SEMANTIC]
     hooks = [a for a, s in ctx.arms.items() if s.consultation is ConsultationMode.HOOKS]
     out = []
     for s in sem:
         for h in hooks:
+            keep = lambda e: not ctx.template_quirk or e.get("template") in ctx.template_quirk  # noqa: E731
+            _, _, idx_all, drop = _pairs(rows, s, h, keep)
             es = {e["idx"]: e for e in stream_of(rows, s)}
             eh = {e["idx"]: e for e in stream_of(rows, h)}
-            idx = [i for i in sorted(es.keys() & eh.keys()) if not eh[i].get("correct") and es[i].get("correct")
-                   and (not ctx.template_quirk or eh[i].get("template") in ctx.template_quirk)]
+            idx = [i for i in idx_all if not eh[i].get("correct") and es[i].get("correct")]
+            fallback = any("matched_ids" not in eh[i] for i in idx)
 
             def right(e: Row) -> bool:
                 q = ctx.template_quirk.get(e.get("template"))
@@ -502,11 +537,17 @@ def retrieval_lead(rows: Mapping[str, list[Row]], ctx: Context) -> list[Reading]
                            and (not pm or pm.get(c.get("decision_id"), {}).get("quirk") == q)
                            for c in e.get("consulted", []))
 
-            lead = [i for i in idx if right(es[i]) and not eh[i].get("consulted")]
+            def unmatched(e: Row) -> bool:
+                return not (e["matched_ids"] if "matched_ids" in e else e.get("consulted"))
+
+            lead = [i for i in idx if right(es[i]) and unmatched(eh[i])]
+            notes = [n for n in (None if pm else "no planted map: any applied decision counts as the right one",
+                                 "matched_ids absent on some episodes: consulted used" if fallback else None,
+                                 _drop_note(drop)) if n]
             out.append(Reading(f"E9.{s}-over-{h}", len(lead) / len(idx) if idx else None, "share of lead indices",
                                f"quirk-bearing stream indices where {h} missed and {s} hit", len(idx),
                                q_find("episodes", f"arm: {{$in: ['{s}', '{h}']}}, stream: 'stream'", "retrieval_lead"),
-                               note=None if pm else "no planted map: any applied decision counts as the right one"))
+                               note="; ".join(notes) or None))
     return out
 
 
@@ -570,14 +611,24 @@ def models_served_readings(summary: Sequence[Row]) -> list[Reading]:
     return out
 
 
-def sandbox_readings(events: Sequence[Row], ctx: Context) -> list[Reading]:
-    refusals = [e for e in events if e.get("name") == "guard_refusal"]
-    by = Counter((e.get("arm", "?"), e.get("party", "?")) for e in refusals)
-    q = "var/runs/R/events.jsonl name == 'guard_refusal' | metrics.readings.sandbox_readings"
-    return [Reading(f"sandbox.guard_refusals.{arm}.{party}", c, "refused pipelines",
-                    f"trace events of arm {arm}, party {party}", c, q) for (arm, party), c in sorted(by.items())] or [
-        Reading("sandbox.guard_refusals", 0, "refused pipelines", "trace events", len(events), q,
-                note=None if events else "no trace events for this run (Trace=null?)")]
+def sandbox_readings(rows: Mapping[str, list[Row]], events: Sequence[Row], ctx: Context) -> list[Reading]:
+    """Guard refusals per arm: episodes whose `error` starts `PipelineRefused` (always read), with the refusing
+    party from `guard_refusal` trace events when Trace wrote them (`unknown` otherwise)."""
+    q_ep = q_find("episodes", "error: /^PipelineRefused/", "sandbox_readings")
+    party: dict[str, str] = {}
+    for e in events:
+        if e.get("name") == "guard_refusal" and e.get("episode_id"):
+            party[e["episode_id"]] = str(e.get("party") or "unknown")
+    out = []
+    for arm in ctx.arms:
+        ref = [e for e in rows.get("episodes", []) if e.get("arm") == arm
+               and str(e.get("error") or "").startswith("PipelineRefused")]
+        n_eps = len([e for e in rows.get("episodes", []) if e.get("arm") == arm])
+        by = Counter(party.get(e["_id"], "unknown") for e in ref)
+        out.append(Reading(f"sandbox.guard_refusals.{arm}", len(ref), "refused pipelines", f"episodes of arm {arm}",
+                           n_eps, q_ep, note=("by party: " + ", ".join(f"{k} {v}" for k, v in sorted(by.items())))
+                           if ref else None))
+    return out
 
 
 # --- lifecycle timeline -------------------------------------------------------------------------------
@@ -641,12 +692,117 @@ def read_forecast(fid: str, entry: Mapping[str, Any], rows: Mapping[str, list[Ro
     return {**base, "verdict": "unread", "readings": [], "note": f"no reading kind {kind!r}"}
 
 
+def errored(e: Row) -> bool:
+    return bool(e.get("error"))
+
+
+def scored_of(rows: Mapping[str, list[Row]], arm: str) -> list[Row]:
+    """Stream episodes with no `error` (S2's `episode_failed` episodes are excluded from every rate)."""
+    return [e for e in stream_of(rows, arm) if not errored(e)]
+
+
+def _drop_note(drop: Mapping[str, int]) -> str | None:
+    parts = [f"{k} {v}" for k, v in drop.items() if v]
+    return ("pairs dropped: " + ", ".join(parts)) if parts else None
+
+
+def rolling_paired(rows: Mapping[str, list[Row]], ctx: Context, reference: str) -> dict[str, list[dict[str, Any]]]:
+    """Demo beat 1: per arm, the paired accuracy difference arm − reference over a rolling window of
+    `PAIRED_ROLLING_WINDOW` stream indices, one point per round, with its interval and n."""
+    if reference not in ctx.arms:
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    w = ctx.rolling_window
+    for arm in ctx.arms:
+        if arm == reference or not stream_of(rows, arm):
+            continue
+        pts = []
+        for end in range(ctx.round_size, ctx.run_length + 1, ctx.round_size):
+            lo = max(0, end - w)
+            xa, xb, _, _ = _pairs(rows, arm, reference, lambda e, lo=lo, end=end: lo <= e["idx"] < end)
+            if not xa:
+                continue
+            pr = paired_difference(xa, xb, n_boot=ctx.bootstrap_n, level=ctx.ci_level, seed=ctx.seed)
+            pts.append({"idx_lo": lo, "idx_hi": end - 1, "diff": pr.diff, "lo": pr.lo, "hi": pr.hi, "n": pr.n})
+        out[arm] = pts
+    return out
+
+
+def _is_injection(d: Row) -> bool:
+    return d.get("source") == "injection"
+
+
+def injection_readings(rows: Mapping[str, list[Row]], ctx: Context, events: Sequence[Row]) -> list[Reading]:
+    """Injection (S6's live beat) counted apart from organic readings: drafts with `source: injection`, their
+    backtests and verdicts, injection episodes, and `injection.*` trace events."""
+    drafts = [d for d in rows.get("drafts", []) if _is_injection(d)]
+    ids = {d["_id"] for d in drafts}
+    bts = [b for b in rows.get("backtests", []) if b.get("draft_id") in ids]
+    eps = [e for e in rows.get("episodes", []) if e.get("stream") == "injection"]
+    ev = Counter(e["name"] for e in events if str(e.get("name", "")).startswith("injection."))
+    q = q_find("drafts", "source: 'injection'", "injection_readings")
+    return [
+        Reading("injection.drafts", len(drafts), "drafts", "drafts with source injection", len(drafts), q),
+        Reading("injection.backtests", dict(Counter(b.get("verdict") for b in bts)), "backtests per verdict",
+                "backtests of injection drafts", len(bts), q),
+        Reading("injection.episodes", len(eps), "episodes", "episodes with stream injection", len(eps),
+                q_find("episodes", "stream: 'injection'", "injection_readings")),
+        Reading("injection.events", dict(ev), "trace events", "injection.* trace events", sum(ev.values()),
+                "var/runs/R/events.jsonl name ^injection. | metrics.readings.injection_readings"),
+    ]
+
+
+def floor_readings(rows: Mapping[str, list[Row]], ctx: Context) -> list[Reading]:
+    """The floor beat: `tool_access` rewires (logical → view, owning decision) and stream episodes whose
+    pipeline ran through a rewired view (`view_map` non-empty), per arm."""
+    out = []
+    ta = rows.get("tool_access", [])
+    for arm in ctx.arms:
+        rw = [{"logical": t.get("logical"), "view": t.get("view"), "decision_id": t.get("decision_id")}
+              for t in ta if t.get("arm") == arm]
+        es = stream_of(rows, arm)
+        vf = [e for e in es if e.get("view_map")]
+        if not rw and not vf:
+            continue
+        out.append(Reading(f"floor.rewires.{arm}", rw, "rewired collections", f"tool_access rows of arm {arm}",
+                           len(rw), q_find("tool_access", f"arm: '{arm}'", "floor_readings")))
+        out.append(Reading(f"floor.view_filtered.{arm}", len(vf), "episodes",
+                           f"stream episodes of arm {arm} whose pipeline ran through a view", len(es),
+                           q_find("episodes", f"arm: '{arm}', stream: 'stream', view_map: {{$ne: {{}}}}",
+                                  "floor_readings"),
+                           note=(f"first at idx {vf[0]['idx']}" if vf else None)))
+    return out
+
+
+def lifecycle_counts(rows: Mapping[str, list[Row]], ctx: Context) -> list[Reading]:
+    """Decisions by lifecycle status per arm; converged (merge successors) apart from superseded."""
+    out = []
+    for arm in ctx.arms:
+        ds = [d for d in rows.get("decisions", []) if d.get("arm") == arm]
+        if not ds:
+            continue
+        c = Counter(d.get("lifecycle", {}).get("status") for d in ds)
+        out.append(Reading(f"lifecycle.{arm}", dict(sorted(c.items())), "decisions per lifecycle status",
+                           f"decisions of arm {arm}", len(ds), q_find("decisions", f"arm: '{arm}'", "lifecycle_counts"),
+                           note="converged = merged into a successor; not a supersession, never a drift resolution"))
+    return out
+
+
+def unmetered(ctx: Context) -> list[Reading]:
+    """Disclosure: calls the shared call path does not meter (no cheap hook in this build)."""
+    return [Reading("spend.not_metered", ["voyage embed", "voyage rerank", "typesafe lens panel"], "call kinds",
+                    "model calls outside the Anthropic call path", 0, "none: not recorded in spend",
+                    note="these calls are not metered: spend readings exclude their cost and tokens")]
+
+
 # --- everything ---------------------------------------------------------------------------------------
 
 
 def all_readings(rows: Mapping[str, list[Row]], ctx: Context, *, spend: Sequence[Row] = (),
                  events: Sequence[Row] = (), priced: Iterable[str] = ()) -> dict[str, Any]:
-    arms = [a for a in ctx.arms if stream_of(rows, a) or any(e.get("arm") == a for e in rows.get("episodes", []))]
+    arms = [a for a in ctx.arms if any(e.get("arm") == a for e in rows.get("episodes", []))]
+    reference = next((str(e.get("read", {}).get("reference")) for e in ctx.forecasts.values()
+                      if e.get("read", {}).get("reference")), "")
     curves = {a: stream_curve(rows, ctx, a) for a in arms}
     v = {a: v_points(rows, a) for a in arms}
     summary = [r for a in arms for r in arm_summary(rows, ctx, a)]
@@ -661,12 +817,16 @@ def all_readings(rows: Mapping[str, list[Row]], ctx: Context, *, spend: Sequence
         "drifts": dict(ctx.drift_at),
         "curves": curves,
         "v_points": v,
+        "reference": reference,
+        "paired_curves": rolling_paired(rows, ctx, reference),
+        "notes": list(ctx.notes),
         "forecasts": [read_forecast(fid, e, rows, ctx) for fid, e in ctx.forecasts.items()],
         "readings": [r.to_dict() for r in (summary + drift_rows + quirk_recall(rows, ctx)
                                            + backtest_summary(rows, ctx) + supersession_audit(rows, ctx)
                                            + retrieval_lead(rows, ctx) + spend_readings(spend, rows, ctx, priced)
-                                           + models_served_readings(spend)
-                                           + sandbox_readings(events, ctx))],
+                                           + models_served_readings(spend) + lifecycle_counts(rows, ctx)
+                                           + floor_readings(rows, ctx) + injection_readings(rows, ctx, events)
+                                           + sandbox_readings(rows, events, ctx) + unmetered(ctx))],
         "timeline": timeline(rows, ctx),
         "spend": list(spend),
     }

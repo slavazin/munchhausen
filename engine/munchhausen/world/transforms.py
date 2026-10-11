@@ -159,13 +159,20 @@ def exclude_value(params: dict[str, Any]) -> Slots:
     return {params["slot"]: lambda d: d.get(field) != value}
 
 
+@gold("keep_null")
+def keep_null(params: dict[str, Any]) -> Slots:
+    """Docs whose `field` is set are excluded (a convention: Q3's prior trap reads `deleted_at` this way)."""
+    field = params["field"]
+    return {params["slot"]: lambda d: d.get(field) is None}
+
+
 @gold("net_of_fee")
 def net_of_fee(params: dict[str, Any]) -> Slots:
     """Q5: revenue = Σ `amount_field` (stored as a string) over items of `kind` × factor."""
     kind_field, kind, amount, factor = params["kind_field"], params["kind"], params["amount_field"], params["factor"]
 
     def revenue(trades: Iterable[Doc]) -> float:
-        return sum(float(t[amount]) for t in trades if t[kind_field] == kind) * factor
+        return sum(float(t[amount]) for t in trades if kind is None or t[kind_field] == kind) * factor
     return {"revenue": revenue}
 
 
@@ -235,6 +242,12 @@ def customers_avg_accounts(data: Data, slots: Slots, p: dict[str, Any], args: di
     return sum(len(c.get("accounts", ())) for c in cs) / len(cs) if cs else 0.0
 
 
+@measure("customers_accounts_held")
+def customers_accounts_held(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -> int:
+    """Σ over the selected customers of the accounts each lists (monotone in the selected set)."""
+    return sum(len(c.get("accounts", ())) for c in _customers(data, slots, p, args))
+
+
 @measure("customers_accounts_limit_sum")
 def customers_accounts_limit_sum(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -> int:
     """Σ limit over the distinct accounts (present in `accounts`) held by the selected customers."""
@@ -278,6 +291,8 @@ def _trades(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -
             if args.get("tech") and not slots["tech_symbol"](t):
                 continue
             if "symbol" in p and t["symbol"] != p["symbol"]:
+                continue
+            if "year_from" in p and _year(t["date"]) < p["year_from"]:
                 continue
             if "year" in p and _year(t["date"]) != p["year"]:
                 continue

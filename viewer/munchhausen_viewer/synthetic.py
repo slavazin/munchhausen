@@ -262,14 +262,15 @@ def build(settings: Settings, run_id: str, *, length: int | None = None, seed: i
                 else ("active customers" if group == "q1" else None),
                 confirmed_figure=(answer if ok else figure) if spec.authority else None,
                 residuals=residuals, collections=(coll,)))
-        for v_at in range(settings.v_offset, n, settings.v_every):
+        for vk, v_at in enumerate(range(settings.v_offset, n, settings.v_every)):
             for k in range(10):
                 t, persona, terms, coll, group = TEMPLATES[k % len(TEMPLATES)]
                 p = p_correct(spec, group, v_at, bool(ids) and v_at > q1_admit, bool(ids) and v_at > succ_admit,
                               bool(ids) and v_at > floor_admit)
                 sr.episodes.append(Episode(
                     _id=episode_id(run_id, arm, v_at, stream="v", question_id=f"v{k}"), run_id=run_id, arm=arm,
-                    idx=v_at, question_id=f"v{k}", text=f"[V] {t} #{k}", template=t, persona=persona, terms=terms,
+                    idx=-(1 + vk * 10 + k), v_at=v_at, question_id=f"v{k}",
+                    text=f"[V] {t} #{k}", template=t, persona=persona, terms=terms,
                     world_version="v0", consulted=(), collection=coll, pipeline=[], answer_path="n", view_map={},
                     answer=0, confidence=0.7, correct=rng.random() < p, stream="v", collections=(coll,)))
 
@@ -321,7 +322,7 @@ def build(settings: Settings, run_id: str, *, length: int | None = None, seed: i
         eps = [e for e in sr.episodes if e.arm == arm and e.stream == "stream"]
         for r_ in range(n // R):
             win = [e for e in eps if r_ * R <= e.idx < (r_ + 1) * R]
-            v = [e for e in sr.episodes if e.arm == arm and e.stream == "v" and r_ * R <= e.idx < (r_ + 1) * R]
+            v = [e for e in sr.episodes if e.arm == arm and e.stream == "v" and r_ * R <= (e.v_at or 0) < (r_ + 1) * R]
             sr.rounds.append(RoundRecord(
                 run_id=run_id, arm=arm, round=r_, idx_range=(r_ * R, (r_ + 1) * R - 1),
                 acc_stream=sum(e.correct for e in win) / len(win),
@@ -351,9 +352,8 @@ async def seed(store: object, sr: SyntheticRun, *, concurrency: int = 32) -> dic
 
     s = store
     await s.runs.start(sr.run)  # type: ignore[attr-defined]
-    # `episodes` is unique on (run_id, arm, idx): V episodes share their idx with stream episodes, so the
-    # seed writes V readings only through `rounds.acc_v` (the in-memory model keeps the V episodes).
-    stream = [e for e in sr.episodes if e.stream == "stream"]
+    # V episodes follow the runner's convention (negative ordinal idx, `v_at`), so they never collide
+    stream = sr.episodes
     await asyncio.gather(*(put(s.episodes, e) for e in stream))  # type: ignore[attr-defined]
     await asyncio.gather(*(put(s.observations, o) for o in sr.observations))  # type: ignore[attr-defined]
     await asyncio.gather(*(put(s.drafts, d) for d in sr.drafts))  # type: ignore[attr-defined]

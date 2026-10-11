@@ -68,7 +68,7 @@ async def kickoff_check(s: Settings) -> dict[str, Any]:
 
 async def build_world(s: Settings) -> dict[str, Any]:
     from munchhausen.bootstrap import harness
-    from munchhausen.world.checks import isolation_violations, quirk_effects
+    from munchhausen.world.checks import drift_direction, isolation_violations, poison_collisions, quirk_effects
 
     h = harness(s)
     try:
@@ -83,6 +83,9 @@ async def build_world(s: Settings) -> dict[str, Any]:
                 "decoy_set": sum(b.get("deleted_at") is not None for b in data["transactions"]),
                 "isolation_violations": isolation_violations(gold, bank, pack, data, s.gold_check_combos),
                 "quirk_effect_share": quirk_effects(gold, bank, pack, data, s.gold_check_combos),
+                "drift_direction": drift_direction(gold, bank, pack, data, s.gold_check_combos),
+                "poison_collisions": poison_collisions(gold, bank, pack, data, s.gold_check_combos),
+                "v_set_by_quirk": dict(Counter((bank.hidden(q.id).quirks or ("control",))[0] for q in w.v_set())),
                 "zero_gold": _zero_gold(w, data, s.gold_check_combos)}
     finally:
         await h.close()

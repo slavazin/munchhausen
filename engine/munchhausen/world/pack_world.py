@@ -26,12 +26,16 @@ class PackWorld:
     @classmethod
     def create(cls, name: str, settings: Any, store: Store, *, truth_db: DocumentReader | None = None) -> Self:
         pack = load_pack(settings.pack_path())
+        problems = pack.validate_coverage()
+        missing = [k for k in pack.drift_knobs().values() if not hasattr(settings, k)]
+        if problems or missing:
+            raise ValueError(f"pack {pack.id} refused: {problems + [f'no knob {k!r}' for k in missing]}")
         adapter = registry.resolve("adapter", pack.adapter).create(pack.adapter, settings, store)
         bank = bank_from_pack(pack, settings.quirk_share, sealed=(settings.v_seed, settings.v_size))
         truth = PackGold(pack, bank, store.world(), truth_db, settings.execute_max_time_ms)
         authority = Authority(truth, pack, bank, settings.authority_level, settings.authority_poison_rate,
                               settings.score_rel_tol, settings.score_abs_tol_rounded, settings.world_seed)
-        drift_at = {d: getattr(settings, spec["at_knob"].lower()) for d, spec in pack.drift_schedule.items()}
+        drift_at = {d: getattr(settings, knob) for d, knob in pack.drift_knobs().items()}
         world = cls(adapter, pack, bank, authority, drift_at, settings.v_seed, settings.v_size)
         world.truth = truth
         return world
@@ -95,10 +99,20 @@ class PackWorld:
     def is_quirk_bearing(self, question_id: str) -> bool:
         return bool(self._bank.hidden(question_id).quirks)
 
+    def poisoned(self, question: Question, idx: int) -> str | None:
+        """Evaluation side (F2, planted map): the poison variant id the authority applies at (seed, idx) to
+        this question on a miss, e.g. `N1#0:Q5_revenue`, or None."""
+        k = self._authority.poison_index(question, idx)
+        if k is None:
+            return None
+        return f"N1#{k}:{self._pack.poison_bank[k].params['quirk']}"
+
     def inventory(self) -> dict[str, Any]:
-        """The pack's inventory for the run record: quirks, templates, phrasings, drift indices. Evaluation
-        side only: definitions and gold params are not in it, and the learning path never reads it."""
+        """The pack's inventory for the run record: quirks (with definitions, for the planted map), templates,
+        phrasings, drift indices, poison variants. Evaluation side only; the learning path never reads it.
+        Stream ids depend on the sealed V set, so `v_seed`/`v_size` are part of the stream's identity."""
         quirks = [{"id": q.id, "kind": q.kind, "signature": q.signature, "persona": q.persona,
+                   "definition": q.definition, "weight": q.weight,
                    "templates": list(q.templates), "phrasings": list(q.authority_phrasings),
                    "drifts": [d for d, spec in self._pack.drift_schedule.items() if spec.get("quirk") == q.id]}
                   for q in self._pack.quirks]
@@ -106,8 +120,10 @@ class PackWorld:
                       "combos": _combos(t.params)} for t in self._bank.templates]
         return {"world": self.id, "pack": self._pack.id, "pack_hash": self.pack_hash,
                 "quirks": quirks, "templates": templates, "personas": list(self._pack.personas),
-                "drift_at": dict(self._drift_at), "poison_variants": len(self._pack.poison_bank),
-                "v_seed": self._v_seed, "v_size": self._v_size}
+                "drift_at": dict(self._drift_at),
+                "poison_variants": [f"N1#{k}:{v.params['quirk']}" for k, v in enumerate(self._pack.poison_bank)],
+                "v_seed": self._v_seed, "v_size": self._v_size,
+                "stream_identity": {"v_seed": self._v_seed, "v_size": self._v_size}}
 
 
 def _combos(params: dict[str, tuple[Any, ...]]) -> int:

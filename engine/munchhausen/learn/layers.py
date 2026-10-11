@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from munchhausen import lint_language
+from munchhausen.domain import pipeline_guard
 from munchhausen.domain.backtest import BacktestVerdict
 from munchhausen.domain.common import DecisionKind, FireDisposition, FireRole, LayerRole
 from munchhausen.domain.decision import Decision
@@ -17,14 +18,24 @@ from munchhausen.domain.lesson import lesson_violations
 from munchhausen.learn.backtest import Backtester
 from munchhausen.lint_language import lint_entry
 from munchhausen.ports.curation import CurationContext, LensPanel
-from munchhausen.ports.store import DecisionRepository, FireRepository, LensRepository, TermRepository
+from munchhausen.ports.store import (
+    DecisionRepository,
+    DocumentReader,
+    FireRepository,
+    LensRepository,
+    TermRepository,
+)
 
 
 @dataclass
 class L0Shape:
-    """Structural gate: the entry contract's L0 additions plus the language lint. Refuses only."""
+    """Structural gate: the entry contract's L0 additions plus the language lint. Refuses only.
+
+    A floor's spec must compile to a `$match` stage the world sandbox accepts (`pipeline_guard.check`), on a
+    collection that exists in `world` (`world` given: its collection names)."""
 
     terms: TermRepository
+    world: DocumentReader | None = None
     name: str = "L0"
     role: LayerRole | None = None
 
@@ -40,8 +51,25 @@ class L0Shape:
         if dangling:
             problems.append(f"dangling warrant anchors: {dangling}")
         problems += lint_entry(draft)
+        problems += await self._floor(draft)
         verdict = Verdict.REFUSE if problems else Verdict.PASS
         return LayerOutcome(layer=self.name, role=self.role, verdict=verdict, detail={"problems": problems})
+
+    async def _floor(self, draft: Draft) -> list[str]:
+        floor = draft.floor
+        if floor is None:
+            return []
+        out = []
+        names = await self.world.collection_names() if self.world is not None else None
+        if names is not None and floor.collection not in names:
+            out.append(f"floor collection {floor.collection!r} is not a world collection")
+        if FLOOR_VIEW.search(floor.collection):
+            out.append(f"floor collection {floor.collection!r} is itself a floor view")
+        try:
+            pipeline_guard.check([{"$match": floor.match}], targets=names or ())
+        except pipeline_guard.PipelineRefused as e:
+            out.append(f"floor match refused by the sandbox: {e}")
+        return out
 
 
 @dataclass
@@ -79,6 +107,19 @@ class L2Neighbours:
     role: LayerRole | None = LayerRole.ROUTING
 
     async def check(self, draft: Draft, ctx: CurationContext) -> LayerOutcome:
+        out = await self._route(draft, ctx)
+        floor = draft.floor
+        if out.verdict is Verdict.PASS and floor is not None and self.decisions is not None:
+            replaced = out.neighbour_id if out.route is Route.SUPERSEDE else None
+            clash = [d.id for d in await self.decisions.admitted(draft.run_id, draft.arm)
+                     if d.floor is not None and d.floor.collection == floor.collection and d.id != replaced]
+            if clash:
+                return self._out(Verdict.REFUSE, out.route or Route.NEW, clash[0],
+                                 reason=f"a floor on {floor.collection} is admitted ({clash[0]}); only a supersede "
+                                        "of it may replace it")
+        return out
+
+    async def _route(self, draft: Draft, ctx: CurationContext) -> LayerOutcome:
         if draft.route is Route.DUPLICATE:
             return self._out(Verdict.REFUSE, Route.DUPLICATE, draft.supersedes, reason="declared duplicate")
         if draft.route is Route.SUPERSEDE:
@@ -156,6 +197,9 @@ def escaped_terms(items: Iterable[str]) -> set[str]:
     return {m.group("term").strip().lower() for m in map(_ESCAPE.match, items) if m}
 
 
+FLOOR_VIEW = re.compile(r"__D-[0-9a-f]+$")
+
+
 def _unit(key: str) -> float:
     return int(hashlib.sha256(key.encode()).hexdigest()[:12], 16) / 16**12
 
@@ -163,8 +207,10 @@ def _unit(key: str) -> float:
 @dataclass
 class L4Backtest:
     """The dispositive layer. Delegates to `learn.backtest.Backtester` (paired replay, § 7.4). Admits on
-    `fixed ≥ min ∧ fixed_heldout ≥ min ∧ broken ≤ max`; refuses otherwise, always with the backtest id. The
-    outcome's `label` (1 admitted, 0 refused) is the lens fit's label (§ 9); the fit itself is cut."""
+    `fixed ≥ min ∧ fixed − broken ≥ min ∧ fixed_heldout ≥ min ∧ broken ≤ max`; refuses otherwise, always with
+    the backtest id. A read with fewer than BACKTEST_MIN_N scored pairs HOLDs (`reason: insufficient`): a
+    backtest that could not score never refuses. The outcome's `label` (1 admitted, 0 refused, None held) is
+    the lens fit's label (§ 9); the fit itself is cut."""
 
     backtester: Backtester
     name: str = "L4"
@@ -172,6 +218,9 @@ class L4Backtest:
 
     async def check(self, draft: Draft, ctx: CurationContext) -> LayerOutcome:
         run = await self.backtester.run(draft, ctx)
+        if run.insufficient:
+            return LayerOutcome(layer=self.name, role=self.role, verdict=Verdict.HOLD,
+                                detail={**run.detail(), "reason": "insufficient", "label": None})
         admit = run.backtest.verdict is BacktestVerdict.ADMIT
         return LayerOutcome(layer=self.name, role=self.role, verdict=Verdict.ADMIT if admit else Verdict.REFUSE,
                             detail={**run.detail(), "label": int(admit)})

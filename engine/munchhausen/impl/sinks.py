@@ -11,7 +11,7 @@ from typing import Any, Self
 from munchhausen.config import Settings
 from munchhausen.domain.decision import Decision
 from munchhausen.domain.draft import Shape
-from munchhausen.domain.registers import TRACE_EVENTS
+from munchhausen.domain.registers import catalogued
 from munchhausen.impl._base import NoDeps
 
 
@@ -48,7 +48,7 @@ class JsonlTrace:
 
     def _write(self, name: str, fields: dict[str, Any]) -> None:
         row = {"at": datetime.now(UTC).isoformat(), "run_id": self._run_id, "name": name, **fields}
-        if name not in TRACE_EVENTS:
+        if not catalogued(name):
             row["uncatalogued"] = True
         try:
             with self._path.open("a") as f:
