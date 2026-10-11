@@ -110,8 +110,7 @@ context policy → D2 → Raindrop. If the day runs short, build the minimum con
 - **Sample data is NOT loaded.** Only `admin/config/local` exist (~1 MB). Blocks M1.
   User action: Atlas → Clusters → `…` → Load Sample Dataset; then drop every sample DB except
   `sample_analytics` (SPEC § 3 storage premise, 80% threshold).
-- An unrelated `.env` key is not a driver URI and is not read by config
-  (possibly an Atlas API key). Not read by config. Don't print it.
+- An unrelated `.env` key is not a driver URI and is not read by config. Don't print it.
 
 ## 3. Binding decisions (made in M0; don't relitigate)
 
