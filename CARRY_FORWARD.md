@@ -9,7 +9,65 @@ shape (§ 0, 4.2–4.4, 5, 6.3, 7.1–7.4, 9, 10.1, 11–14, 16, 18, 21, 24.1). 
 now also stated in the SPEC.
 
 **Amended 2026-10-11 13:30 PDT after the orchestrated M1–M4 build (§ 0 below).** § 0 supersedes § 1, § 5 and
-§ 6 where they differ; § 3/§ 3a still bind.
+§ 6 where they differ; § 3/§ 3a still bind. **Amended again 15:00 PDT: § 00 (Run A in flight) supersedes § 0's
+"Open / next" and adds binding decisions 14–22.**
+
+---
+
+## 00. Run A in flight (15:00) — state, decisions 14–22, post-run checklist
+
+**Run A** (`RUN_ID=run-a`, 600 stream episodes, D1_AT=300, V at 75/225/375/525). Each arm runs from its own
+pinned detached worktree (sibling dirs `munch-run-a*`), so merges into `m0-scaffold` never swap code under a live
+process; every later join is recorded in `runs.resumes[]`. Logs: `var/runs/run-a.<arm|direct>.log`; events:
+`var/runs/run-a/events.jsonl` (all arms write to the main repo's `var/` via `VAR_DIR`).
+
+| Arm(s) | Snapshot | Started | Overrides |
+|---|---|---|---|
+| frozen | `5c17115` (munch-run-a) | 14:40 | defaults, TRACE_IMPL=jsonl,raindrop — **done**: 600/600, 0 failed, 0 V holes |
+| naive, self_ref | `9958173` (munch-run-a2) | 14:50 | WORKERS_PER_ARM=10, RAINDROP_DEBUG=false |
+| ungated | `93a0bc9` (munch-run-a3) | 14:52 | + BAR_MIN_TEMPLATES_FLOOR=2 BACKTEST_SAMPLE=random BACKTEST_N=16 BACKTEST_CONCURRENCY=8 |
+| governed | `a9ff9bf` (munch-run-a4) | 14:53 | same as ungated |
+
+Expected end ≈ 15:45–15:50 (naive bounds wall clock). Watch: `uv run munchhausen status run-a --length 600`.
+Evidence so far: `rehearsal-1` (240 eps, D1=120) passed every story beat — governed Q1 `st∈{2,7}` admitted @60 on
+held-out fixes, fire @127, successor `st∈{2,4,7}` @180 (latency 60); ungated floor view `rs≠3`; planted map maps
+self_ref 0/128 to a quirk, governed 3/3. `confirm-1` (60 eps) clean under Atlas roles + Raindrop + isolation.
+
+**Isolation is enforced by Atlas:** users `munch-learner` (readWrite@munchhausen + custom role `munch_world_views`:
+find/listCollections/createCollection/dropCollection on `world`), `munch-executor` (read@world), `munch-evaluator`
+(read@truth, read@world); `MONGODB_URI` = admin, offline steps only (`setup`, `build-world`). `munchhausen
+verify-roles` → `isolation: roles`, 0/18 mismatches. Personas renamed `anna`, `benny`, `claire` (P1 =
+`P1_claire_rounding`).
+
+Binding decisions 14–22 (don't relitigate):
+14. **Held-out fold:** a shape spanning ≥ BAR_MIN_TEMPLATES + HOLDOUT_TEMPLATES templates withholds its
+    least-observed template from the nominator; that template's episodes stay in the backtest population and the
+    sample reserves `BACKTEST_HOLDOUT_SHARE` of slots for them. `Draft.holdout_templates/holdout_observation_ids`.
+15. **Hold to accrue (user-approved):** a draft with no fold whose backtest clears all but the held-out fix HOLDs
+    (`awaiting_heldout_template`, backtest verdict `awaiting_heldout`); observations stay open; it re-nominates
+    only when a NEW template arrives. Wrong/poisoned drafts still refuse.
+16. **Floor bar 2** (`BAR_MIN_TEMPLATES_FLOOR`), declared departure from SPEC § 7.3 (user-approved).
+17. **A hook must reach every source question** (`domain.latches.hook_reaches`); self-blocking `not_this` refused.
+18. **Leak checks match figures by value**, ignore digits inside ISO dates and |x| < `LEAK_MIN_ABS`.
+19. **Drift window** applies only when the rank-1 neighbour is contested and about the shape.
+20. **Accuracy excludes only harness failures** (`error` starts `episode_failed`); execution errors are misses.
+21. **naive/self_ref lesson calls run concurrently** (`DIRECT_CONCURRENCY`), applied in observation order.
+22. **Raindrop** is a write-only `Trace` (`TRACE_IMPL=jsonl,raindrop` tee); never read on the learning path.
+
+**Post-run checklist (in order):**
+1. When every arm ends: re-close `rounds` for `run-a` with HEAD code (arms wrote round records with different
+   snapshots of `round_pipeline`; `$merge` is idempotent) — loop `evidence.close_round` over each arm's rounds.
+2. `PLANTED_MAP_CONCURRENCY=16 uv run munchhausen planted-map run-a` (Opus judge; resumes; ~$10).
+3. `uv run munchhausen report run-a --against rehearsal-1` → `var/reports/run-a/`; read every forecast beside
+   its reading. F6 likely reads below (ungated admits everything) — state it as the cost of the gate.
+4. Demo beats: viewer `munchhausen viewer --run run-a` (injection beat on governed, `why active_customer`,
+   floor beat if governed admitted a floor; else ungated's).
+5. Export evidence into a tracked `docs/evidence/` (report.md/html, readings.json, manifest.json).
+6. **Before any further push:** rewrite history with `git filter-repo` — replace absolute local paths and the
+   old key-format note in every commit, map author email to the GitHub noreply address — then force-push.
+   `origin/m0-scaffold` was pushed 14:55 with those strings in older commits. Merge to `main` only on the
+   user's go-ahead.
+7. Update README (claim language, n/intervals, what was built on the day) and LESSONS if new patterns appear.
 
 ---
 
