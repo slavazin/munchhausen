@@ -17,6 +17,8 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["engine/tests"]
 asyncio_mode = "auto"
+markers = ["live: needs Atlas and/or model keys; deselected by default"]
+addopts = "-m 'not live'"
 
 [tool.ruff]
 line-length = 120
