@@ -405,7 +405,7 @@ INJECTION = "injection"   # Draft.source / Observation.via / spend meta.source o
 
 
 def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int],
-                   inject_stage: str = "inject") -> Pipeline:
+                   inject_stage: str = "inject", non_llm_stages: tuple[str, ...] = ("embed", "rerank")) -> Pipeline:
     """The round record, computed in Atlas and `$merge`d into `rounds` (SPEC § 20.2). Run over `episodes`.
 
     Populations: stream accuracy, self-assessed accuracy and the calibration gap over stream episodes with
@@ -417,7 +417,8 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
     The injection beat is excluded throughout: drafts with `source: injection`, observations with
     `via: injection`, spend with `meta.stage == inject_stage` (INJECT_STAGE) or `meta.source: injection`.
     Accuracy, self-assessed accuracy and the gap exclude episodes with `error` (counted in `n_error`).
-    Tokens come from `spend` rows whose `meta.episode_id` is one of the round's stream episodes; with none
+    Tokens (model calls only; embed/rerank are in usd) come from `spend` rows whose `meta.episode_id` is
+    one of the round's stream episodes; with none
     attributed they are null, never 0."""
     lo, hi = idx_range
     in_range = {"$gte": lo, "$lt": hi}
@@ -449,7 +450,8 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
                 "$ifNull": ["$view_map", {}]}}}, 0]}]}, 1),
         }},
         {"$lookup": {"from": C.SPEND.value, "let": {"ids": "$ids"}, "pipeline": [
-            {"$match": {"meta.run_id": run_id, "meta.arm": arm, "meta.episode_id": {"$exists": True}}},
+            {"$match": {"meta.run_id": run_id, "meta.arm": arm, "meta.episode_id": {"$exists": True},
+                        "meta.stage": {"$nin": list(non_llm_stages)}}},   # model tokens only; Voyage is in usd
             {"$match": {"$expr": {"$in": ["$meta.episode_id", "$$ids"]}}},
             {"$group": {"_id": None, "tin": {"$sum": "$tokens_in"}, "tout": {"$sum": "$tokens_out"},
                         "eps": {"$addToSet": "$meta.episode_id"}}}], "as": "toks"}},
