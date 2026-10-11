@@ -87,7 +87,9 @@ class Nominator:
                                              {"run_id": run_id, "arm": arm,
                                               "lifecycle.status": LifecycleStatus.ADMITTED.value})
             found = [(await self.decisions.get(i), s) for i, s in hits]
-            return [(d, s) for d, s in found if d is not None and d.is_admitted]
+            # the pre-filter names (run, arm); a hit by id is re-checked, so no backend can hand over another arm's
+            return [(d, s) for d, s in found
+                    if d is not None and d.is_admitted and d.run_id == run_id and d.arm == arm]
         keys = set(shape.terms) | {o.surfaces.collection for o in members if o.surfaces.collection}
         scored = []
         for d in await self.decisions.admitted(run_id, arm):
@@ -118,7 +120,7 @@ class Nominator:
             seen.update(eids)
         inp = NominatorInput(
             shape=shape, sources=tuple(members), episodes=tuple(episodes),
-            vocabulary=tuple(t.term for t in await self.terms.all(run_id=run_id)), world=self.world,
+            vocabulary=tuple(t.term for t in await self.terms.all(run_id=run_id, arm=arm)), world=self.world,
             neighbours=tuple(d for d, _ in neighbours), neighbour_residuals=residuals)
         try:
             entry, new_terms = await self.models.nominate(inp)

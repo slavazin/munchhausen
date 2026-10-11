@@ -35,7 +35,7 @@ from munchhausen.domain.episode import Consultation, Episode, Judgement, Proposa
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.latches import Guard, HookLatch, KeySet, RevisitLatch
 from munchhausen.domain.question import Question, QuestionKeys, SchemaSummary
-from munchhausen.domain.registers import Cursor, Term, term_run_key
+from munchhausen.domain.registers import Cursor, Term, term_arm_key, term_run_key, term_visible
 from munchhausen.impl.parties import proposer as proposer_party
 from munchhausen.impl.representation import NoRepresentation
 from munchhausen.impl.reranker import IdentityReranker
@@ -247,21 +247,26 @@ class FakeTerms:
     def __init__(self, rows: Sequence[Term]) -> None:
         self.rows = list(rows)
 
-    async def all(self, *, run_id: str | None = None) -> list[Term]:
-        return [r for r in self.rows if run_id is None or term_run_key(run_id) in r.runs]
+    async def all(self, *, run_id: str | None = None, arm: str | None = None) -> list[Term]:
+        return [r for r in self.rows if term_visible(r, run_id=run_id, arm=arm)]
 
     async def add(self, term: Term) -> None:
-        """As `AtlasTerms.add`: one row per term, runs as a membership map (earliest idx wins)."""
+        """As `AtlasTerms.add`: one row per term, runs (seeded) and arm_runs (learned) as membership maps
+        (earliest idx wins)."""
         old = next((r for r in self.rows if r.term == term.term), None)
         runs = dict(old.runs) if old else {}
-        if term.run_id is not None:
+        arm_runs = dict(old.arm_runs) if old else {}
+        if term.learned and term.run_id is not None and term.arm is not None:
+            k = term_arm_key(term.run_id, term.arm)
+            arm_runs[k] = min(arm_runs.get(k, term.admitted_at_idx), term.admitted_at_idx)
+        elif term.run_id is not None:
             k = term_run_key(term.run_id)
             runs[k] = min(runs.get(k, term.admitted_at_idx), term.admitted_at_idx)
-        new = (old or term).model_copy(update={"runs": runs})
+        new = (old or term).model_copy(update={"runs": runs, "arm_runs": arm_runs})
         self.rows = [r for r in self.rows if r.term != term.term] + [new]
 
-    async def extract(self, text: str, *, run_id: str | None = None) -> frozenset[str]:
-        return present_terms(text, await self.all(run_id=run_id))
+    async def extract(self, text: str, *, run_id: str | None = None, arm: str | None = None) -> frozenset[str]:
+        return present_terms(text, await self.all(run_id=run_id, arm=arm))
 
     async def compile_synonyms(self) -> int:
         return 0

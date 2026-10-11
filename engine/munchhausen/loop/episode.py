@@ -122,7 +122,8 @@ class ForwardPass:
 
         residuals = ()
         if authority and not judgement.correct and judgement.figure is not None:
-            phrasing_terms = (await self.store.terms.extract(judgement.phrasing, run_id=self.run_id)
+            phrasing_terms = (await self.store.terms.extract(judgement.phrasing, run_id=self.run_id,
+                                                             arm=self.arm.name)
                               if judgement.phrasing else frozenset())
             residuals = compute_residuals(eid, proposal.consulted, {d.id: d for d in consulted}, answer,
                                           judgement.figure, phrasing_terms, rounding_base=self.params.rounding_base)
@@ -239,7 +240,9 @@ class ForwardPass:
                     decision_id=d.id, latch="residual", role=FireRole.CORROBORATING,
                     cause=FireCause.UNATTRIBUTED, episode_ids=(episode.id,), residual_ids=(r.id,),
                     at_idx=episode.idx))
-        applied = [c.decision_id for c in episode.consulted if c.disposition is Disposition.APPLIED]
+        # only decisions this arm's consultation returned: a proposer-claimed id outside it never gets a fire
+        applied = [c.decision_id for c in episode.consulted
+                   if c.disposition is Disposition.APPLIED and c.decision_id in decisions]
         for k, note in enumerate(episode.anomalies):
             for did in applied:
                 await self._fire(Fire(

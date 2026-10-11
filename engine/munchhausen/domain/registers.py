@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from munchhausen.domain.common import Value
 
@@ -108,11 +108,45 @@ class Term(Value):
     decision_id: str | None = None
     run_id: str | None = None                 # S2: the run this row is written for (seeding is per run)
     runs: dict[str, int] = Field(default_factory=dict)   # run key → admitted_at_idx in that run (`term_run_key`)
+    # additive (arm isolation): a LEARNED term (`source: nominator`, admitted with a draft) belongs to the arm
+    # that admitted it, never to the run. `arm` is the arm this row is written for; `arm_runs` is the membership
+    # map of learned admissions, `term_arm_key(run, arm)` → admitted_at_idx. Seeded terms stay in `runs`.
+    arm: str | None = None
+    arm_runs: dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _learned_terms_name_their_arm(self) -> Term:
+        if self.source in LEARNED_TERM_SOURCES and (self.run_id is None or self.arm is None):
+            raise ValueError(f"learned term {self.term!r} ({self.source}) must name its run and arm")
+        return self
+
+    @property
+    def learned(self) -> bool:
+        return self.source in LEARNED_TERM_SOURCES
+
+
+LEARNED_TERM_SOURCES: frozenset[str] = frozenset({"nominator"})   # sources whose terms are arm-scoped (§ 22.4)
 
 
 def term_run_key(run_id: str) -> str:
     """A run id as a field-safe key of `Term.runs` (Atlas paths treat '.' as nesting and '$' as an operator)."""
     return run_id.replace(".", "_").replace("$", "_")
+
+
+def term_arm_key(run_id: str, arm: str) -> str:
+    """(run, arm) as a field-safe key of `Term.arm_runs`."""
+    return f"{term_run_key(run_id)}:{term_run_key(arm)}"
+
+
+def term_visible(term: Term, *, run_id: str | None, arm: str | None) -> bool:
+    """The one definition of which terms an arm's vocabulary holds: with no run, every row (registers, tests);
+    with a run, the run's seeded terms plus, with an arm, the terms that arm learned in that run. Another
+    arm's learned term is never visible (arm isolation: learned vocabulary moves hook matching)."""
+    if run_id is None:
+        return True
+    if term_run_key(run_id) in term.runs:
+        return True
+    return arm is not None and term_arm_key(run_id, arm) in term.arm_runs
 
 
 class SpendRow(Value):

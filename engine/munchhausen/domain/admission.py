@@ -7,7 +7,7 @@ insert the successor, flip predecessors, dispose their open fires, rewire tool a
 from __future__ import annotations
 
 from munchhausen.domain.common import DecisionKind, LifecycleStatus, Value
-from munchhausen.domain.decision import Decision, Lifecycle, Representation
+from munchhausen.domain.decision import Decision, Lifecycle, LifecycleError, Representation
 from munchhausen.domain.draft import Draft, Route
 from munchhausen.domain.ids import decision_id
 from munchhausen.domain.latches import WiringLatch
@@ -38,7 +38,11 @@ def plan_admission(
     rep: Representation | None = None,
     emb: dict[str, list[float]] | None = None,
 ) -> Admission:
-    """Turn a draft that passed its dispositive layer into an admission plan."""
+    """Turn a draft that passed its dispositive layer into an admission plan. Every predecessor belongs to the
+    draft's own run and arm: an admission never flips, or releases the views of, another arm's decision."""
+    foreign = [p.id for p in predecessors if (p.run_id, p.arm) != (draft.run_id, draft.arm)]
+    if foreign:
+        raise LifecycleError(f"{draft.id}: predecessors {foreign} belong to another run or arm")
     did = decision_id(draft.id)
     supersedes = draft.supersedes if draft.route is Route.SUPERSEDE else None
     converged_from = tuple(p.id for p in predecessors) if draft.route is Route.REFINE else ()

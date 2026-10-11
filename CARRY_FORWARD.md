@@ -58,6 +58,9 @@ Binding decisions made in this build (don't relitigate):
     matches are guard-checked at L0 and before `create_view`; `$lookup/$graphLookup/$unionWith` targets are
     rewritten through `view_map`; gold reads `world_evaluation()` (unguarded, evaluator side only).
 11. **Terms are run-scoped** (`Term.runs[run] = admitted_at_idx`); hook terms are case/space-normalized.
+    Amended (arm isolation): seeded terms stay run-wide; learned terms (`source: nominator`) live in
+    `Term.arm_runs[run:arm]` and reach only that arm (`domain.registers.term_visible`; `extract`/`all` take
+    `arm`). Nothing writes learned terms yet (SPEC § 22.4 growth is unbuilt), so the leak was latent.
 12. **Naive merge = converge successor** (tombstone per merge); readings exclude `converged`/`retired` from drift
     resolution; F4 needs a real supersession with a successor.
 13. **Evidence:** proxy readings read `unread (proxy)`; paired readings drop errored or mismatched pairs;
