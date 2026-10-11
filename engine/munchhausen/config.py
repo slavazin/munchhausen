@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     v_offset: int = 75                  # first V read; with V_EVERY 150 no read lands on D1_AT or D2_AT
     frozen_stream: bool = True          # frozen runs the stream: the paired no-learning baseline
     vocab_warmup: int = 40
+    schema_sample_docs: int = 50        # docs per collection sampled for the schema summary (names + types)
+    schema_max_depth: int = 2           # nesting depth the schema summary walks (`transactions.symbol`)
+    pilot_n: int = 40                   # SPEC § 12 pilot gate: stream questions answered by the frozen proposer
+    pilot_quirk_max: float = 0.35       # gate holds if quirk-bearing accuracy ≤ this …
+    pilot_control_min: float = 0.70     # … and control accuracy ≥ this
+    kickoff_max_time_ms: int = 60_000   # source-profile aggregations in `kickoff-check` / `build-world`
+    gold_check_combos: int = 12         # parameter combinations per template in the build-time gold checks
 
     # --- scoring -------------------------------------------------------------------------------------
     score_rel_tol: float = 1e-4
