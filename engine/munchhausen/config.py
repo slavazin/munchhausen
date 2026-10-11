@@ -177,7 +177,7 @@ class Settings(BaseSettings):
     # --- shaping (S3: observer, episodic pass, nominator) ---------------------------------------------
     observer_max_tokens: int = 4000
     nominator_max_tokens: int = 16000
-    nominator_max_tool_turns: int = 12      # model turns in the nominator's world-tool loop before it must submit
+    nominator_max_tool_turns: int = 20      # model turns in the nominator's world-tool loop before it must submit
     nominator_tool_max_rows: int = 50       # rows one world-tool call returns to the nominator ($limit appended)
     nominator_tool_max_time_ms: int = 5000  # maxTimeMS per world-tool aggregate
     nominator_tool_result_chars: int = 6000 # characters of one tool result shown to the nominator
@@ -189,6 +189,9 @@ class Settings(BaseSettings):
     # rounds of matched episodes, so a post-drift gap is not diluted by every pre-drift episode.
     direction_window: int = 40
     error_prompt_chars: int = 300           # characters of a driver error shown to a party (code + errmsg)
+    leak_min_abs: float = 10.0              # world-tool literal-figure refusal ignores |figure| below this ($sum: 1)
+    nominator_profile_sample: int = 200     # documents sampled by the nominator's `profile` tool
+    nominator_profile_max_values: int = 12  # a field with at most this many distinct values lists them
 
     # --- second-order loop ---------------------------------------------------------------------------
     label_horizon: int = 150

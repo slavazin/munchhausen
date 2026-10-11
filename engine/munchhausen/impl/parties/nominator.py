@@ -17,16 +17,19 @@ Latch ids are placeholders (`T-pending-<k>`); `learn/nominate.py` rewrites them 
 from __future__ import annotations
 
 import json
+import re
 import time
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from munchhausen.agent.execute import ExecutionError, read_path
 from munchhausen.config import Settings
 from munchhausen.domain.common import Answer, DecisionKind, EvidenceState, Signature
-from munchhausen.domain.decision import EntryContract, Option, Warrant, leaked_figures
+from munchhausen.domain.decision import EntryContract, Option, Warrant
 from munchhausen.domain.episode import Residual
 from munchhausen.domain.latches import (
     FloorLatch,
@@ -64,11 +67,20 @@ Method (follow it in order):
 1. Run the prior convention first. Use the aggregate tool to run the reading the pipelines already take
    (label the run with the prior option's label) against at least one source episode, and see which
    figures it fails to reproduce. This becomes a rejected option with prior: true.
-2. Search for a definition that reproduces the source figures. Inspect fields and distinct values with
-   the aggregate tool when you need to (label such runs "explore"). Run each candidate against as many
-   source episodes as you can; a definition counts as reproducing a figure only when a labelled run of it
-   returned that figure. Never submit a definition you have not run.
-3. Submit the entry with submit_draft.
+2. Before proposing definitions, list the fields of the collection with their distinct small-cardinality
+   values (the profile tool, or $group by field / $sortByCount). The definition may live in a field whose
+   name does not name it: a coded field with a handful of values is as much a candidate as a field whose
+   name matches the question's words.
+3. Search for a definition that reproduces the source figures (label exploratory runs "explore"). Run each
+   candidate against as many source episodes as you can; a definition counts as reproducing a figure only
+   when a labelled run of it returned that figure. Never submit a definition you have not run. A rejected
+   option whose run errored or read nothing still counts as run: it reproduced nothing.
+4. Submit the entry with submit_draft.
+
+Literal values must have the stored BSON type. A `date` field compares only with a date literal, written
+in Extended JSON: {"$date": "2012-01-01T00:00:00Z"}. Never write new Date(...) or ISODate(...), and never
+compare a date field with a string such as "2012-01-01" or "1995": it matches nothing. Date operators
+($year, $month, $dateToString) also apply to date fields.
 
 The entry contract:
 - title: the decided constraint, at most 12 words, present tense. Never the deliberation, never a figure.
@@ -78,7 +90,8 @@ The entry contract:
   (verdict chosen), and any other definitions you ran and rejected. Each label must match the labels
   you used on aggregate runs.
 - forecloses: the answers this decision moves away from.
-- hook: fires_when keyed on how a question PRESENTS (terms from the vocabulary, the collections, a persona
+- hook: fires_when keyed on how a question PRESENTS: the shape's shared_terms when it has any (the words its
+  questions arrive in), other vocabulary terms, the collections, a persona
   only if the shape is one persona's preference). Bias broad: a false match costs one
   considered-not-applicable; a miss is silent. Never key the hook on the decision's own conclusion.
   Recover precision with not_this rows; each row carries keys plus a contrast: one instantiated case the
@@ -142,12 +155,20 @@ class DraftWire(BaseModel):
     supersedes: str | None = None
 
 
+DATE_LITERAL = 'dates as {"$date": "YYYY-MM-DDT00:00:00Z"}, never a string'
+
+
 class AggregateWire(BaseModel):
     collection: str
-    pipeline_json: str
+    pipeline_json: str = Field(description=f"The aggregation pipeline as a strict JSON array of stages; "
+                                           f"{DATE_LITERAL}")
     answer_path: str = ""
     option: str = "explore"
     episode_id: str = ""
+
+
+class ProfileWire(BaseModel):
+    collection: str
 
 
 def _inline(schema: dict[str, Any]) -> dict[str, Any]:
@@ -173,8 +194,18 @@ TOOLS: list[dict[str, Any]] = [
             "Run a read-only MongoDB aggregation pipeline on one world collection and read the answer at "
             "answer_path ('0.total' = row 0, key total; '*.name' = a list over rows). Name the option the run "
             "tests (its label, or 'explore') and the source episode whose figure it should reproduce. The "
-            "result reports the answer, that episode's figure and whether they match. Rows are capped."),
+            "result reports the answer, that episode's figure and whether they match. Rows are capped. "
+            f"Write {DATE_LITERAL}."),
         "input_schema": _inline(AggregateWire.model_json_schema()),
+    },
+    {
+        "name": "profile",
+        "description": (
+            "List the fields of one world collection over a sample of its documents: each field's types, its "
+            "number of distinct values in the sample, and the values with their counts when there are few. "
+            "Use it before proposing definitions: a definition may live in a coded field whose name does not "
+            "name it."),
+        "input_schema": _inline(ProfileWire.model_json_schema()),
     },
     {
         "name": "submit_draft",
@@ -196,11 +227,40 @@ class Run:
     error: str | None = None
     collection: str = ""
     pipeline: tuple[Any, ...] = ()
+    refused: bool = False          # refused before running (a literal source figure): not evidence
 
     def row(self) -> dict[str, Any]:
         return {"option": self.option, "episode_id": self.episode_id, "collection": self.collection,
                 "pipeline": list(self.pipeline), "answer": self.answer, "reproduced": self.reproduced,
-                "error": self.error}
+                "error": self.error, "refused": self.refused}
+
+
+_NUMERIC = re.compile(r"^\s*-?\d+(?:\.\d+)?\s*$")
+
+
+def literal_figures(pipeline: Any, figures: Sequence[float], min_abs: float) -> list[float]:
+    """JSON number literals (and fully numeric strings) in a pipeline equal by value to a source figure.
+    Digits inside dates or other strings never match, and figures below `min_abs` in magnitude are ignored,
+    so `$sum: 1`, `$limit: 2` and small codes pass."""
+    targets = {float(f) for f in figures if abs(float(f)) >= min_abs}
+    found: set[float] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+        elif isinstance(node, (int, float)) and not isinstance(node, bool):
+            if float(node) in targets:
+                found.add(float(node))
+        elif isinstance(node, str) and _NUMERIC.match(node) and float(node) in targets:
+            found.add(float(node))
+
+    if targets:
+        walk(pipeline)
+    return sorted(found)
 
 
 @dataclass
@@ -235,10 +295,10 @@ class Session:
                 raise ValueError("pipeline_json must be a JSON array of stages")
         except (ValidationError, ValueError) as e:
             return f"invalid call: {e}", True
-        leaked = leaked_figures(call.pipeline_json, self.source_figures())
+        leaked = literal_figures(pipeline, self.source_figures(), self.settings.leak_min_abs)
         if leaked:   # a pipeline that writes the figure in reproduces nothing
             self.log(Run(call.option, call.episode_id, None, False, f"source figure as a literal: {leaked}",
-                         call.collection, tuple(pipeline)))
+                         call.collection, tuple(pipeline), refused=True))
             return f"refused: the pipeline contains a source figure as a literal: {leaked}", True
         capped = [*pipeline, {"$limit": self.settings.nominator_tool_max_rows}]
         try:
@@ -270,9 +330,51 @@ class Session:
         return tuple(sorted({r.episode_id for r in self.runs if r.option == label and r.reproduced}))
 
     def ran(self, label: str) -> bool:
-        """An option counts as run only by a run against a source episode that read an answer."""
+        """Run and read: a run against a source episode that read an answer (what a chosen option needs)."""
         return any(r.option == label and r.error is None and r.episode_id in self.figures
                    and r.answer is not None for r in self.runs)
+
+    def attempted(self, label: str) -> bool:
+        """Run against a source episode, whatever came back. A rejected option whose pipeline errored or
+        read nothing reproduced nothing, which is the rejection's evidence. A run refused before execution
+        is not."""
+        return any(r.option == label and r.episode_id in self.figures and not r.refused for r in self.runs)
+
+    def example_episode(self) -> str:
+        return next(iter(sorted(self.figures)), "")
+
+    async def profile(self, raw: dict[str, Any]) -> tuple[str, bool]:
+        try:
+            call = ProfileWire.model_validate(raw)
+        except ValidationError as e:
+            return f"invalid call: {e}", True
+        st = self.settings
+        try:
+            docs = await self.inp.world.aggregate(call.collection, [{"$sample": {"size": st.nominator_profile_sample}}],
+                                                  max_time_ms=st.nominator_tool_max_time_ms)
+        except Exception as e:   # noqa: BLE001 - a refusal is data for the model
+            return short_error(f"{type(e).__name__}: {e}", st.error_prompt_chars), True
+        fields: dict[str, dict[str, Any]] = {}
+        for d in docs:
+            for k, v in d.items():
+                if k == "_id":
+                    continue
+                f = fields.setdefault(k, {"types": set(), "values": Counter()})
+                f["types"].add(type(v).__name__)
+                if isinstance(v, (str, int, float, bool)) or v is None:
+                    f["values"][json.dumps(v, default=str)] += 1
+                else:
+                    f["values"][f"<{type(v).__name__}>"] += 1
+        out = {"collection": call.collection, "sampled": len(docs), "fields": {}}
+        for k, f in sorted(fields.items()):
+            vals: Counter[str] = f["values"]
+            row: dict[str, Any] = {"types": sorted(f["types"]), "distinct_in_sample": len(vals)}
+            if len(vals) <= st.nominator_profile_max_values:
+                row["values"] = dict(vals.most_common())
+            out["fields"][k] = row
+        text = json.dumps(out, default=str)
+        limit = st.nominator_tool_result_chars
+        return (text if len(text) <= limit else text[:limit] + " …(truncated)"), False
 
 
 # --- the entry -------------------------------------------------------------------------------------
@@ -301,7 +403,8 @@ def build_entry(w: DraftWire, s: Session) -> EntryContract:
         WiringLatch.build(supersedes=w.supersedes),
     ]
     if w.floor is not None:
-        latches.insert(2, FloorLatch(collection=w.floor.collection, match=decode_dates(json.loads(w.floor.match_json))))
+        match = decode_dates(json.loads(w.floor.match_json))
+        latches.insert(2, FloorLatch(collection=w.floor.collection, match=match))
     warrant = Warrant(source_observation_ids=shape.observation_ids, source_episode_ids=shape.episode_ids,
                       templates=len(shape.templates),
                       figures_reproduced=s.reproduced_by(chosen.label) if chosen else (),
@@ -324,9 +427,12 @@ def submission_problems(w: DraftWire, s: Session) -> list[str]:
     if len(chosen) != 1:
         out.append("exactly one option must be chosen")
     for o in w.options:
-        if not s.ran(o.label):
-            out.append(f"option {o.label!r} has no aggregate run labelled with it against a source episode_id "
-                       "that read an answer; run it first")
+        done = s.ran(o.label) if o.verdict == "chosen" else s.attempted(o.label)
+        if not done:
+            out.append(f"run option {o.label!r} against episode {s.example_episode()!r} or drop it")
+    shared = set(s.inp.shape.terms)
+    if shared and not shared & {t.lower() for t in w.fires_when.terms}:
+        out.append(f"key fires_when on the shape's shared terms: {sorted(shared)}")
     if w.supersedes is not None and w.supersedes not in contested_neighbours(s.inp):
         out.append(f"supersedes {w.supersedes!r} is not a contested neighbour; set it to null")
     if w.floor is not None:
@@ -429,6 +535,8 @@ async def run(llm: LLM, settings: Settings, inp: NominatorInput) -> tuple[EntryC
                 continue
             if block.name == "aggregate":
                 text, is_error = await session.aggregate(dict(block.input))
+            elif block.name == "profile":
+                text, is_error = await session.profile(dict(block.input))
             elif block.name == "submit_draft":
                 try:
                     wire = DraftWire.model_validate(block.input)

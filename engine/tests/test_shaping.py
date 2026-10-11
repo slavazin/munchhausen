@@ -547,7 +547,7 @@ def test_party_records_rejected_prior_and_computes_figures_reproduced() -> None:
     assert e.retire_latch is not None and new_terms == ()
     assert len(llm.calls) == 4 and all(c["stage"] == "nominate" for c in llm.calls)
     first_reply = client.requests[1]["messages"][2]["content"][0]
-    assert first_reply["is_error"] and "no aggregate run labelled" in first_reply["content"]
+    assert first_reply["is_error"] and "run option 'prior' against episode" in first_reply["content"]
     assert client.requests[0]["output_config"] == {"effort": S.nominator_effort}
     assert client.requests[0]["model"] == S.nominator_model
 
@@ -692,3 +692,110 @@ def test_noise_provenance_and_empty_observer() -> None:
     assert run(o.observe(episode("r:a:e10"), 0)) == [] and "observation.none" in trace.names()
     long = "OperationFailure: bad, full error: {'ok': 0, 'errmsg': 'bad'}"
     assert observer_party.short_error(long, S.error_prompt_chars) == "OperationFailure: bad"
+
+
+# --- smoke-1 fixes ---------------------------------------------------------------------------------
+
+
+def test_literal_figure_guard_matches_number_literals_by_value_only() -> None:
+    lf = nominator_party.literal_figures
+    figs = [1.0, 1204.0, 2.0]
+    assert lf([{"$group": {"_id": None, "n": {"$sum": 1}}}, {"$limit": 2}], figs, S.leak_min_abs) == []
+    assert lf([{"$match": {"birthdate": {"$gte": "1970-01-01T00:00:00Z"}, "code": "a1204b"}}], figs,
+              S.leak_min_abs) == []
+    assert lf([{"$project": {"n": {"$literal": 1204}}}], figs, S.leak_min_abs) == [1204.0]
+    assert lf([{"$project": {"n": "1204"}}], figs, S.leak_min_abs) == [1204.0]
+    assert lf([{"$match": {"flag": True}}], [1.0, 10.0], S.leak_min_abs) == []
+
+
+def test_a_rejected_option_whose_run_failed_counts_and_a_missing_one_gets_a_short_instruction() -> None:
+    class Failing(World):
+        async def aggregate(self, collection, pipeline, *, max_time_ms):  # noqa: ANN001, ANN201
+            if any("$bad" in st for st in pipeline):
+                raise RuntimeError("OperationFailure: unknown stage, full error: {...}")
+            return await super().aggregate(collection, pipeline, max_time_ms=max_time_ms)
+
+    inp = party_input(Failing())
+    session = nominator_party.Session.open(S, inp)
+    text, err = run(session.aggregate({"collection": "customers", "pipeline_json": '[{"$bad": 1}]',
+                                       "answer_path": "0.n", "option": "prior", "episode_id": "r:a:e1"}))
+    assert err and "full error" not in text
+    run(session.aggregate({"collection": "customers", "pipeline_json": '[{"$match": {"status": "open"}}]',
+                           "answer_path": "0.n", "option": "open", "episode_id": "r:a:e1"}))
+    wire = nominator_party.DraftWire.model_validate(SUBMIT)
+    assert nominator_party.submission_problems(wire, session) == []
+    extra = nominator_party.DraftWire.model_validate(
+        {**SUBMIT, "options": [*SUBMIT["options"], {"label": "flag", "definition": "the active flag",
+                                                    "verdict": "rejected", "prior": False}]})
+    assert nominator_party.submission_problems(extra, session) == [
+        "run option 'flag' against episode 'r:a:e1' or drop it"]
+
+
+def test_hook_must_key_on_the_shapes_shared_terms() -> None:
+    inp = party_input(World())
+    assert inp.shape.terms == frozenset({"active customers"})
+    session = nominator_party.Session.open(S, inp)
+    for opt, flt in (("prior", "[]"), ("open", '[{"$match": {"status": "open"}}]')):
+        run(session.aggregate({"collection": "customers", "pipeline_json": flt, "answer_path": "0.n",
+                               "option": opt, "episode_id": "r:a:e1"}))
+    off = nominator_party.DraftWire.model_validate(
+        {**SUBMIT, "fires_when": {"terms": [], "collections": ["customers"], "persona": None}})
+    assert any("shared terms" in p for p in nominator_party.submission_problems(off, session))
+
+
+class CodedWorld:
+    """A collection whose definition lives in a coded field (`k`) the question never names."""
+
+    DOCS = [{"_id": i, "active": True, "k": 2 if i % 10 < 7 else 9, "name": f"c{i}"} for i in range(100)]
+
+    async def aggregate(self, collection: str, pipeline: list[dict[str, Any]], *, max_time_ms: int):  # noqa: ANN201
+        if pipeline and "$sample" in pipeline[0]:
+            return self.DOCS[: pipeline[0]["$sample"]["size"]]
+        match = next((st["$match"] for st in pipeline if "$match" in st), {})
+        n = sum(all(d.get(k) == v for k, v in match.items()) for d in self.DOCS)
+        return [{"n": n}]
+
+    async def collection_names(self) -> list[str]:
+        return ["customers", "customers__D-1"]
+
+    async def find(self, *a: Any, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+
+def test_replayed_q1_nomination_converges_with_profile_and_a_coded_field() -> None:
+    """Offline replay of the smoke-1 failure: prior run, profile reveals the coded field, the candidate on it
+    reproduces both figures, an errored rejected option still counts, submission accepted within the cap."""
+    members = [obs("o1", "r:a:e1"), obs("o2", "r:a:e2", template="t2")]
+    members = [m.model_copy(update={"answer": 100.0, "figure": 70.0}) for m in members]
+    inp = NominatorInput(shape=shape_of(members), sources=members,
+                         episodes=[episode("r:a:e1", figure=70.0), episode("r:a:e2", figure=70.0)],
+                         vocabulary=["active customers"], world=CodedWorld())  # type: ignore[arg-type]
+
+    def agg_(tid: str, option: str, eid: str, match: dict[str, Any]) -> SimpleNamespace:
+        return tool(tid, "aggregate", {"collection": "customers", "answer_path": "0.n", "option": option,
+                                       "episode_id": eid, "pipeline_json": json.dumps(
+                                           [{"$match": match}, {"$count": "n"}])})
+
+    submit = {**SUBMIT, "options": [
+        {"label": "prior", "definition": "every customer with the active flag", "verdict": "rejected", "prior": True},
+        {"label": "date-string", "definition": "active customers born after a date written as a string",
+         "verdict": "rejected", "prior": False},
+        {"label": "coded", "definition": "customers whose code field k equals 2", "verdict": "chosen",
+         "prior": False}],
+        "payload": "An active customer is a customer document whose code field k equals 2."}
+    turns = [
+        [agg_("a1", "prior", "r:a:e1", {"active": True})],
+        [tool("p1", "profile", {"collection": "customers"})],
+        [tool("a2", "aggregate", {"collection": "customers", "answer_path": "0.n", "option": "date-string",
+                                  "episode_id": "r:a:e1", "pipeline_json": "[{\"$match\": {\"x\": 1}}]"})],
+        [agg_("a3", "coded", "r:a:e1", {"k": 2}), agg_("a4", "coded", "r:a:e2", {"k": 2})],
+        [tool("s1", "submit_draft", submit)],
+    ]
+    client = Client(turns)
+    e, _ = run(nominator_party.run(LLM(client), S, inp))  # type: ignore[arg-type]
+    assert len(client.requests) == 5 <= S.nominator_max_tool_turns == 20
+    profile_reply = client.requests[2]["messages"][4]["content"][0]["content"]
+    assert '"k"' in profile_reply and '"2": 70' in profile_reply
+    chosen = next(o for o in e.options if o.verdict == "chosen")
+    assert chosen.figures_reproduced == ("r:a:e1", "r:a:e2")
+    assert "customers__D-1" not in client.requests[0]["messages"][0]["content"]
