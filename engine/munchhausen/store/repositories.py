@@ -175,6 +175,10 @@ class AtlasCursors:
         await self._c.update_one({"run_id": run_id, "arm": "_consumers"},
                                  {"$set": {f"resume_tokens.{consumer}": token}}, upsert=True)
 
+    async def resume_token(self, run_id: str, consumer: str) -> dict[str, Any] | None:
+        doc = await self._c.find_one({"run_id": run_id, "arm": "_consumers"}, {f"resume_tokens.{consumer}": 1})
+        return ((doc or {}).get("resume_tokens") or {}).get(consumer)
+
 
 class AtlasLeases:
     def __init__(self, coll: AsyncCollection[Doc], episodes: AsyncCollection[Doc], ttl_s: int) -> None:

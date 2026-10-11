@@ -189,6 +189,10 @@ class CursorRepository(Protocol):
 
     async def save_resume_token(self, run_id: str, consumer: str, token: dict[str, Any]) -> None: ...
 
+    async def resume_token(self, run_id: str, consumer: str) -> dict[str, Any] | None:
+        """The consumer's last saved change-stream token, or None (start from now)."""
+        ...
+
 
 @runtime_checkable
 class LeaseRepository(Protocol):
@@ -332,3 +336,55 @@ class Store(Protocol):
                             filter: dict[str, Any], *, exact: bool = False) -> list[tuple[str, float]]: ...
 
     async def close(self) -> None: ...
+
+
+# --- read models (viewer, SPEC § 17) ----------------------------------------------------------------
+
+
+@runtime_checkable
+class ReadModel(Protocol):
+    """Read-only aggregations for the viewer. Methods take `at`, a stream index: the replay scrubber shows
+    the stores as they stood at that index (None: as they stand). Rows are JSON-ready dicts; nothing
+    writes through this port except the change-stream consumer's own resume token."""
+
+    async def runs(self) -> list[dict[str, Any]]: ...
+
+    async def timeline(self, run_id: str) -> dict[str, Any]:
+        """Scrubber bounds: max idx per arm, templates seen, store counts."""
+        ...
+
+    async def decisions(self, run_id: str, arm: str, *, at: int | None) -> list[dict[str, Any]]:
+        """Decisions with the latch fan, status and evidence state at `at`, and the backtest record."""
+        ...
+
+    async def fires(self, run_id: str, arms: Sequence[str], *, at: int | None, limit: int) -> list[dict[str, Any]]:
+        """Fires and floor-view rewires across arms, newest first, with the residuals that raised them."""
+        ...
+
+    async def latest_episode(self, run_id: str, arm: str, *, at: int | None,
+                             stream: str | None = None) -> dict[str, Any] | None: ...
+
+    async def drafts(self, run_id: str, arm: str, *, at: int | None, limit: int) -> list[dict[str, Any]]: ...
+
+    async def draft(self, draft_id: str) -> dict[str, Any] | None:
+        """One draft with its per-layer adjudication and its backtest record."""
+        ...
+
+    async def curves(self, run_id: str, *, reference: str, window: int, at: int | None) -> dict[str, Any]: ...
+
+    async def why(self, run_id: str, target: str, *, at: int | None, arm: str | None = None) -> dict[str, Any]:
+        """`why <decision|term>`: lineage by `$graphLookup` plus observations, episodes, backtests, fires."""
+        ...
+
+    async def floor(self, decision_id: str) -> dict[str, Any] | None:
+        """The floor beat: the view, its predicate, row counts on both sides, a pipeline re-run on both."""
+        ...
+
+    async def facets(self, run_id: str, *, at: int | None) -> list[dict[str, Any]]:
+        """Episodes by arm × template × correct (`$searchMeta` when `episodes_search` exists, else `$group`)."""
+        ...
+
+    def changes(self, run_id: str, collections: Sequence[str]) -> AsyncIterator[dict[str, Any]]:
+        """Change events over the named stores with pre/post images where enabled; resumes from the
+        consumer's saved token (`cursors`) and saves each new one."""
+        ...
