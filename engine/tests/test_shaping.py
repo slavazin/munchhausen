@@ -186,7 +186,7 @@ class Drafts:
 
 
 class Terms:
-    async def all(self, *, run_id: str | None = None) -> list[Term]:
+    async def all(self, *, run_id: str | None = None, arm: str | None = None) -> list[Term]:
         return [Term(term="active customers", source="schema", admitted_at_idx=0)]
 
 

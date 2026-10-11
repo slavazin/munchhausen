@@ -9,14 +9,13 @@ crash between steps leaves an unused view, never a register row pointing at a mi
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from munchhausen.domain.admission import Admission
 from munchhausen.domain.common import Disposer, FireDisposition, FireRole
 from munchhausen.domain.decision import Decision
-from munchhausen.domain.pipeline_guard import check_floor
+from munchhausen.domain.pipeline_guard import FLOOR_VIEW_NAME, check_floor
 from munchhausen.ports.sinks import MemorySink, Trace
 from munchhausen.ports.store import (
     DecisionRepository,
@@ -25,8 +24,6 @@ from munchhausen.ports.store import (
     ToolAccessRepository,
     WorldWriter,
 )
-
-FLOOR_VIEW_NAME = re.compile(r"[A-Za-z0-9_.]+__D-[0-9a-f]+")
 
 
 @dataclass

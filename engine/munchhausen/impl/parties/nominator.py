@@ -44,6 +44,7 @@ from munchhausen.domain.latches import (
     hook_reaches,
     why_unreached,
 )
+from munchhausen.domain.pipeline_guard import check_scope
 from munchhausen.domain.pipeline_json import decode_dates, parse_pipeline
 from munchhausen.domain.question import QuestionKeys
 from munchhausen.domain.scoring import matches
@@ -307,6 +308,7 @@ class Session:
             return f"refused: the pipeline contains a source figure as a literal: {leaked}", True
         capped = [*pipeline, {"$limit": self.settings.nominator_tool_max_rows}]
         try:
+            check_scope(call.collection, capped, own_views=())   # base collections only: no arm's floor view
             rows = await self.inp.world.aggregate(call.collection, capped,
                                                   max_time_ms=self.settings.nominator_tool_max_time_ms)
         except Exception as e:   # driver and guard refusals are data for the model, not a crash
@@ -355,6 +357,7 @@ class Session:
             return f"invalid call: {e}", True
         st = self.settings
         try:
+            check_scope(call.collection, [], own_views=())   # base collections only: no arm's floor view
             docs = await self.inp.world.aggregate(call.collection, [{"$sample": {"size": st.nominator_profile_sample}}],
                                                   max_time_ms=st.nominator_tool_max_time_ms)
         except Exception as e:   # noqa: BLE001 - a refusal is data for the model

@@ -256,16 +256,19 @@ class ToolAccessRepository(Protocol):
 
 @runtime_checkable
 class TermRepository(Protocol):
-    async def all(self, *, run_id: str | None = None) -> list[Term]:
-        """Every term; with `run_id`, the terms admitted for that run only."""
+    async def all(self, *, run_id: str | None = None, arm: str | None = None) -> list[Term]:
+        """Every term; with `run_id`, the terms seeded for that run; with `arm` too, plus the terms that arm
+        learned in that run (`domain.registers.term_visible`). Never another arm's learned term."""
         ...
 
     async def add(self, term: Term) -> None:
-        """Upsert by `term`; a `term.run_id` adds the run to the row's `runs` at its `admitted_at_idx`."""
+        """Upsert by `term`; a seeded `term.run_id` adds the run to the row's `runs`, a learned term
+        (`Term.learned`) adds its (run, arm) to `arm_runs`, each at its `admitted_at_idx`."""
         ...
 
-    async def extract(self, text: str, *, run_id: str | None = None) -> frozenset[str]:
-        """Question text → presented terms (`$search` over `terms` with synonyms, § 20.3)."""
+    async def extract(self, text: str, *, run_id: str | None = None, arm: str | None = None) -> frozenset[str]:
+        """Question text → presented terms (`$search` over `terms` with synonyms, § 20.3), over the
+        vocabulary `all(run_id=, arm=)` returns: the arm's learned terms never reach another arm."""
         ...
 
     async def compile_synonyms(self) -> int:

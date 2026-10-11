@@ -114,8 +114,8 @@ class FakeEpisodes:
         return balance([e for e in rows if e.correct], misses, n)
 
     async def consultations_of(self, run_id: str, arm: str, decision_id: str, last_n: int) -> list[Episode]:
-        rows = sorted((e for e in self.st.episodes.values()
-                       if any(c.decision_id == decision_id for c in e.consulted)), key=lambda e: -e.idx)
+        rows = sorted((e for e in self.st.episodes.values() if e.run_id == run_id and e.arm == arm
+                       and any(c.decision_id == decision_id for c in e.consulted)), key=lambda e: -e.idx)
         return rows[:last_n]
 
 
@@ -228,7 +228,8 @@ class FakeDrafts:
         self.st.drafts[draft_id] = d.model_copy(update={"adjudication": {**d.adjudication, outcome.layer: outcome}})
 
     async def held(self, run_id: str, arm: str) -> list[Draft]:
-        return [d for d in self.st.drafts.values() if d.status is DraftStatus.HELD]
+        return [d for d in self.st.drafts.values()
+                if d.run_id == run_id and d.arm == arm and d.status is DraftStatus.HELD]
 
 
 class FakeBacktests:
@@ -267,7 +268,8 @@ class FakeObservations:
         return self.st.observations.get(i)
 
     async def open_for_pass(self, run_id: str, arm: str, *, since_round: int) -> list[Observation]:
-        return [o for o in self.st.observations.values() if o.disposition is ObservationDisposition.OPEN]
+        return [o for o in self.st.observations.values()
+                if o.run_id == run_id and o.arm == arm and o.disposition is ObservationDisposition.OPEN]
 
     async def dispose(self, ids: Sequence[str], disposition: ObservationDisposition, by: str) -> None:
         for i in ids:
@@ -280,7 +282,7 @@ class FakeTerms:
     def __init__(self, st: State) -> None:
         self.st = st
 
-    async def all(self, *, run_id: str | None = None) -> list[Term]:
+    async def all(self, *, run_id: str | None = None, arm: str | None = None) -> list[Term]:
         return list(self.st.terms)
 
 

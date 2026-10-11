@@ -60,6 +60,16 @@ registered forecasts hold. Re-registering means a new `RUN_ID` (Run A is a pilot
   (sha256 of the system prompt), `request_id` (`"cache"` on a response-cache hit), `served_model`
   (`message.model`), `ok`, `error` (class and HTTP status, e.g. `RateLimitError(429)`). **A failed call is a row.**
   Parties calling `client` directly use `llm.record_call(...)` and `llm.record_error(...)`.
+- **Disclosed cost-attribution skew: shared Voyage caches.** `embedding_cache` and `rerank_cache` (`EMBED_CACHE`,
+  `RERANK_CACHE`) are content-addressed and shared by every arm and run by design: the same input gets the same
+  vector or order, so no arm's retrieval depends on which arm asked first. Their spend does. A `spend` row
+  (stage `embed`/`rerank`, meta `arm` = the arm whose port sent the request, `VOYAGE_UNATTRIBUTED_ARM` when the
+  port is bound to none) is written only for an actual Voyage request; a cache hit writes no row and is counted
+  only in the port's `stats()`. The first arm to embed or rerank an input pays and every later arm reads it free;
+  two arms that miss in the same micro-batch window both pay. Per-arm embed/rerank `usd` therefore reads arrival
+  order, not each arm's own need. Read it summed over arms, or per arm as an upper bound; never as a paired
+  difference. Model calls are not skewed this way: the response cache (`RESPONSE_CACHE`) keys on the arm, and a
+  hit writes a zero-token row with `request_id: "cache"`.
 
 ## 3. `rounds` and trace events
 

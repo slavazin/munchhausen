@@ -1,6 +1,6 @@
 """Execute (SPEC § 6.1, § 8): resolve the logical collection through the arm's tool-access register and
 run the pipeline read-only. Floor decisions act here — a rewired view enforces its `$match` on every
-pipeline against that collection."""
+pipeline against that collection. Another arm's floor view is never reachable (`check_scope`)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 from munchhausen.domain.common import Answer
 from munchhausen.domain.episode import Proposal
-from munchhausen.domain.pipeline_guard import rewrite_targets
+from munchhausen.domain.pipeline_guard import check_scope, rewrite_targets
 from munchhausen.ports.store import DocumentReader
 
 
@@ -29,6 +29,8 @@ async def execute(proposal: Proposal, view_map: dict[str, str], world: DocumentR
     target = view_map.get(proposal.collection, proposal.collection)
     pipeline = rewrite_targets(proposal.pipeline, view_map)   # floors bind cross-collection reads too
     try:
+        # arm isolation: only this arm's floor views (its register) and base collections are reachable
+        check_scope(target, pipeline, own_views=view_map.values())
         rows = await world.aggregate(target, pipeline, max_time_ms=max_time_ms)
     except Exception as e:   # driver errors are data here: they classify the miss as irreducible
         raise ExecutionError(f"{type(e).__name__}: {e}") from e

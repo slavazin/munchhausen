@@ -8,6 +8,9 @@ proposer's `execute`, the nominator's world tool, the authority's gold reads —
   depth, in pipelines and in `find` filters.
 - `$lookup`, `$graphLookup` and `$unionWith` reach only names in the world's collection/view set; their
   sub-pipelines (and `$facet` branches) pass the same guard.
+- Arm scope (`check_scope`): floor views of every arm share the `world` database, so a reader that knows the
+  caller's arm refuses any floor view outside that arm's tool-access register, as the queried collection
+  or as a cross-collection target. The nominator's world tool reads base collections only (no views).
 - A row cap: `capped()` appends `$limit cap + 1`, and `check_rows()` refuses a result past the cap.
 
 Residue: the guard reads the pipeline's shape, not its cost; `maxTimeMS` bounds the cost. It does not check
@@ -16,6 +19,7 @@ that a pipeline is correct, only that it reads `world` and nothing else.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -31,6 +35,8 @@ REFUSED_STAGES: frozenset[str] = frozenset({
 })
 REFUSED_OPERATORS: frozenset[str] = frozenset({"$where", "$function", "$accumulator"})
 CROSS_STAGES: frozenset[str] = frozenset({"$lookup", "$graphLookup", "$unionWith"})
+# Floor views are named `<collection>__<decision id>` (`store/names.view_name`, decision ids `D-<hex>`, SPEC § 8)
+FLOOR_VIEW_NAME = re.compile(r"[A-Za-z0-9_.]+__D-[0-9a-f]+")
 
 
 class PipelineRefused(ValueError):
@@ -69,12 +75,26 @@ def lookup_targets(pipeline: Any) -> set[str]:
     return out
 
 
+def is_floor_view(name: str) -> bool:
+    return FLOOR_VIEW_NAME.fullmatch(name) is not None
+
+
+def check_scope(collection: str, pipeline: Any, *, own_views: Iterable[str]) -> None:
+    """Arm isolation at the read boundary: the queried collection and every `$lookup`/`$graphLookup`/
+    `$unionWith` target (any depth) is a base collection or one of `own_views` (the caller's tool-access
+    register). Another arm's floor view is refused. Run after `rewrite_targets`; `check` still applies."""
+    own = frozenset(own_views)
+    for name in (collection, *sorted(lookup_targets(pipeline))):
+        if is_floor_view(name) and name not in own:
+            raise PipelineRefused(f"{name!r} is a floor view outside this arm's tool access")
+
+
 def check_floor(collection: str, match: Any, *, collections: Iterable[str]) -> None:
     """A floor view's definition passes the same sandbox as any pipeline: its `$match` is checked as
     `[{"$match": match}]`, and the collection it shadows must be a world collection (never `system.*`)."""
     names = frozenset(n for n in collections if not n.startswith("system."))
-    if collection not in names:
-        raise PipelineRefused(f"floor shadows {collection!r}, which is not a world collection")
+    if collection not in names or is_floor_view(collection):
+        raise PipelineRefused(f"floor shadows {collection!r}, which is not a base world collection")
     if not isinstance(match, dict):
         raise PipelineRefused("floor match must be an object")
     check([{"$match": match}], targets=names)

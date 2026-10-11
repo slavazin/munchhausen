@@ -30,7 +30,9 @@ from munchhausen.domain.registers import (
     SpendRow,
     Term,
     ToolAccess,
+    term_arm_key,
     term_run_key,
+    term_visible,
 )
 from munchhausen.store.codec import from_doc, to_doc
 from munchhausen.store.names import C
@@ -63,12 +65,13 @@ class AtlasEpisodes(_Ledger[Episode]):
     async def for_learner(self, run_id: str, arm: str, *, with_authority: bool,
                           filter: dict[str, Any] | None = None) -> list[Doc]:
         projection = None if with_authority else {f: 0 for f in EVALUATION_ONLY_FIELDS}
-        return await self._c.find({"run_id": run_id, "arm": arm, **(filter or {})}, projection).to_list()
+        # scope last: a caller's filter narrows the arm's episodes, never replaces the arm (isolation)
+        return await self._c.find({**(filter or {}), "run_id": run_id, "arm": arm}, projection).to_list()
 
     async def backtest_population(self, run_id: str, arm: str, keys_filter: dict[str, Any], *,
                                   exclude_ids: Sequence[str], after_idx: int | None, n: int) -> list[Episode]:
-        match: Doc = {"run_id": run_id, "arm": arm, "stream": "stream", "_id": {"$nin": list(exclude_ids)},
-                      **keys_filter}
+        match: Doc = {"stream": "stream", "_id": {"$nin": list(exclude_ids)}, **keys_filter,
+                      "run_id": run_id, "arm": arm}
         if after_idx is not None:
             match["idx"] = {"$gt": after_idx}
         half = max(1, n // 2)
@@ -126,8 +129,8 @@ class AtlasEpisodes(_Ledger[Episode]):
                                     after_idx: int | None = None, last_n: int | None = None) -> DirectionRead:
         lo = after_idx if after_idx is not None else 0
         if last_n is not None:
-            cur = self._c.find({"run_id": run_id, "arm": arm, "stream": "stream",
-                                "idx": {"$gte": lo, "$lt": before_idx}, **inside}, {"idx": 1}
+            cur = self._c.find({"$and": [inside, {"run_id": run_id, "arm": arm, "stream": "stream",
+                                                  "idx": {"$gte": lo, "$lt": before_idx}}]}, {"idx": 1}
                                ).sort("idx", -1).skip(max(0, last_n - 1)).limit(1)
             nth = [d async for d in cur]
             if nth:
@@ -287,20 +290,32 @@ class AtlasTerms:
     def __init__(self, coll: AsyncCollection[Doc]) -> None:
         self._c = coll
 
-    async def all(self, *, run_id: str | None = None) -> list[Term]:
-        q: Doc = {} if run_id is None else {f"runs.{term_run_key(run_id)}": {"$exists": True}}
-        return [Term.model_validate(d) async for d in self._c.find(q)]
+    async def all(self, *, run_id: str | None = None, arm: str | None = None) -> list[Term]:
+        """Every term; with `run_id`, the run's seeded terms; with `arm` too, plus that arm's learned terms
+        (`domain.registers.term_visible`). Another arm's learned term is never returned."""
+        q: Doc = {}
+        if run_id is not None:
+            seeded: Doc = {f"runs.{term_run_key(run_id)}": {"$exists": True}}
+            learned: Doc = {} if arm is None else {f"arm_runs.{term_arm_key(run_id, arm)}": {"$exists": True}}
+            q = {"$or": [seeded, learned]} if learned else seeded
+        rows = [Term.model_validate(d) async for d in self._c.find(q)]
+        return [t for t in rows if term_visible(t, run_id=run_id, arm=arm)]
 
     async def add(self, term: Term) -> None:
         """One row per term (the `terms.term` index is unique); runs are a membership map on the row, each
-        with its own `admitted_at_idx` (the earliest wins)."""
-        doc = {k: v for k, v in to_doc(term).items() if k != "runs"}
+        with its own `admitted_at_idx` (the earliest wins). A learned term (`Term.learned`) joins its
+        (run, arm) in `arm_runs`, never the run-wide `runs`."""
+        doc = {k: v for k, v in to_doc(term).items() if k not in ("runs", "arm_runs")}
         update: Doc = {"$setOnInsert": doc}
-        if term.run_id is not None:
+        if term.learned:
+            if term.run_id is None or term.arm is None:   # the domain validator refuses this; never fall to `runs`
+                raise ValueError(f"learned term {term.term!r} must name its run and arm")
+            update["$min"] = {f"arm_runs.{term_arm_key(term.run_id, term.arm)}": term.admitted_at_idx}
+        elif term.run_id is not None:
             update["$min"] = {f"runs.{term_run_key(term.run_id)}": term.admitted_at_idx}
         await self._c.update_one({"term": term.term}, update, upsert=True)
 
-    async def extract(self, text: str, *, run_id: str | None = None) -> frozenset[str]:
+    async def extract(self, text: str, *, run_id: str | None = None, arm: str | None = None) -> frozenset[str]:
         """`$search` over `terms_search` (with the `term_synonyms` mapping) for candidate rows, then the one
         definition of presence (`agent.terms.present_terms`) over them. When the index is absent or not READY,
         the same definition runs over every row (the in-process fallback, SPEC § 20.3)."""
@@ -326,9 +341,9 @@ class AtlasTerms:
         if not rows:                       # no candidates is never trusted: the in-process rule decides
             rows = None
         if rows is None:
-            rows = await self.all(run_id=run_id)
-        elif run_id is not None:
-            rows = [r for r in rows if term_run_key(run_id) in r.runs]
+            rows = await self.all(run_id=run_id, arm=arm)
+        else:                              # `$search` reads every row: the same membership rule post-filters
+            rows = [r for r in rows if term_visible(r, run_id=run_id, arm=arm)]
         return present_terms(text, rows)
 
     # --- S2 (M2) additions ------------------------------------------------------------------------------

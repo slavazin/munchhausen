@@ -43,7 +43,8 @@ class L0Shape:
     async def check(self, draft: Draft, ctx: CurationContext) -> LayerOutcome:
         figures = [x for o in ctx.sources for x in (o.answer, o.figure) if isinstance(x, (int, float))]
         problems = draft.l0_violations(figures, self.leak_min_abs)
-        known = {t.term.lower() for t in await self.terms.all(run_id=ctx.run_id)} | escaped_terms(draft.new_terms)
+        known = ({t.term.lower() for t in await self.terms.all(run_id=ctx.run_id, arm=ctx.arm)}
+                 | escaped_terms(draft.new_terms))
         unknown = sorted({t.lower() for t in draft.hook.fires_when.terms} - known)
         if unknown:
             problems.append(f"hook terms outside the vocabulary: {unknown}")
@@ -64,7 +65,7 @@ class L0Shape:
         names = await self.world.collection_names() if self.world is not None else None
         if names is not None and floor.collection not in names:
             out.append(f"floor collection {floor.collection!r} is not a world collection")
-        if FLOOR_VIEW.search(floor.collection):
+        if pipeline_guard.is_floor_view(floor.collection):
             out.append(f"floor collection {floor.collection!r} is itself a floor view")
         try:
             pipeline_guard.check([{"$match": floor.match}], targets=names or ())
@@ -126,6 +127,9 @@ class L2Neighbours:
         if draft.route is Route.SUPERSEDE:
             target = draft.supersedes
             pred = await self._get(target, ctx) if target else None
+            if pred is not None and (pred.run_id, pred.arm) != (draft.run_id, draft.arm):
+                return self._out(Verdict.REFUSE, Route.SUPERSEDE, target,
+                                 reason="supersede target belongs to another run or arm")
             if pred is None or not pred.is_admitted:
                 return self._out(Verdict.REFUSE, Route.SUPERSEDE, target,
                                  reason="supersede target is not an admitted decision")
@@ -198,7 +202,7 @@ def escaped_terms(items: Iterable[str]) -> set[str]:
     return {m.group("term").strip().lower() for m in map(_ESCAPE.match, items) if m}
 
 
-FLOOR_VIEW = re.compile(r"__D-[0-9a-f]+$")
+FLOOR_VIEW = pipeline_guard.FLOOR_VIEW_NAME   # one definition of a floor-view name (domain/pipeline_guard)
 
 
 def _unit(key: str) -> float:
