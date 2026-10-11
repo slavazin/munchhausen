@@ -59,6 +59,48 @@ def isolation_violations(gold: PackGold, bank: QuestionBank, pack: Pack, data: D
     return out
 
 
+def poison_collisions(gold: PackGold, bank: QuestionBank, pack: Pack, data: Data,
+                      limit: int) -> dict[str, list[str]]:
+    """Combos where a poison variant's figure equals the prior trap's figure (it would confirm what the
+    proposer already believes: must be empty) or equals gold (that draw is no lie: reported, tolerated for
+    rounding variants, where it is unavoidable on figures near a round thousand)."""
+    out: dict[str, list[str]] = {"convention": [], "gold": []}
+    for k, v in enumerate(pack.poison_bank):
+        quirk = v.params["quirk"]
+        params = {x: y for x, y in v.params.items() if x != "quirk"}
+        q = pack.quirk(quirk)
+        templates = q.templates
+        for tid in templates:
+            persona = q.persona or next(p for p in pack.personas if p not in pack.persona_quirks())
+            for p in combos(bank.template(tid), limit):
+                question = bank.pose(tid, persona, p)
+                for version in world_versions(pack):
+                    poison = gold.compute(question, version, data, variant=(quirk, params))
+                    if poison == gold.compute(question, version, data):
+                        out["gold"].append(f"N1#{k} {tid} {p} @ {version}")
+                    if poison == gold.compute(question, version, data, convention=True):
+                        out["convention"].append(f"N1#{k} {tid} {p} @ {version}")
+    return out
+
+
+def drift_direction(gold: PackGold, bank: QuestionBank, pack: Pack, data: Data, limit: int) -> dict[str, list[str]]:
+    """Per drift: the sign of gold(after) − gold(before) over every combo of the drifted quirk's templates.
+    A uniform sign is what lets the revisit guard's direction read separate drift from scatter."""
+    out: dict[str, list[str]] = {}
+    versions = world_versions(pack)
+    for before, after in itertools.pairwise(versions):
+        drift = after.rsplit("+", 1)[1]
+        quirk = pack.drift_schedule[drift]["quirk"]
+        signs = set()
+        for tid in pack.quirk(quirk).templates:
+            for p in combos(bank.template(tid), limit):
+                q = bank.pose(tid, pack.personas[0], p)
+                a, b = gold.compute(q, before, data), gold.compute(q, after, data)
+                signs.add("+" if b > a else "-" if b < a else "0")
+        out[drift] = sorted(signs)
+    return out
+
+
 def quirk_effects(gold: PackGold, bank: QuestionBank, pack: Pack, data: Data, limit: int) -> dict[str, float]:
     """template id → share of combinations whose gold differs from the poison variant (v0)."""
     variants = {v.params["quirk"]: {k: x for k, x in v.params.items() if k != "quirk"} for v in pack.poison_bank}

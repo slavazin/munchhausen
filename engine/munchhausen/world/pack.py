@@ -37,6 +37,7 @@ class Quirk(BaseModel):
     persona: str | None = None          # preference quirks: the persona whose questions carry it (P1: dana)
     definition: str = ""                # hidden; spoken only at AUTHORITY_LEVEL=rule (a control setting)
     weight: float = 1.0                 # relative draw weight among quirk-bearing stream questions
+    convention: TransformRef | None = None   # the prior trap as a gold transform (None: the base slots)
 
 
 class TemplateSpec(BaseModel):
@@ -100,7 +101,20 @@ class Pack(BaseModel):
         for q in self.quirks:
             if q.persona is not None:
                 out += [f"{q.id}: persona template {t} is not a control" for t in q.templates if t in owner]
+        scheduled = {(spec.get("quirk"), spec.get("at_knob")) for spec in self.drift_schedule.values()}
+        for q in self.quirks:
+            for d in q.drift:
+                if not isinstance(d.at_idx, int) and (q.id, d.at_idx) not in scheduled:
+                    out.append(f"{q.id}: drift at {d.at_idx!r} names no drift_schedule knob for this quirk")
+        for name, spec in self.drift_schedule.items():
+            q = next((x for x in self.quirks if x.id == spec.get("quirk")), None)
+            if q is None or not any(d.at_idx == spec.get("at_knob") for d in q.drift):
+                out.append(f"{name}: no drift on quirk {spec.get('quirk')!r} at {spec.get('at_knob')!r}")
         return out
+
+    def drift_knobs(self) -> dict[str, str]:
+        """Drift id → the settings attribute holding its stream index (e.g. D1 → `d1_at`)."""
+        return {d: str(spec["at_knob"]).lower() for d, spec in self.drift_schedule.items()}
 
 
 def load_pack(path: Path) -> Pack:
