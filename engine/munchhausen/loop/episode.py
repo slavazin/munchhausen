@@ -8,7 +8,8 @@ Every collaborator is a port or an application service injected at construction 
 this class holds the sequence and nothing vendor- or dataset-specific.
 
 Every state change is persisted and also emitted as a Trace event with its ids (`consultation_set`,
-`view_resolved`, `guard_refusal`, `proposal_failed`, `episode_written`, `fire_raised`). Nothing on the
+`view_resolved`, `guard_refusal`, `proposal_failed`, `episode_output`, `episode_written`, `fire_raised`), and the
+judgement as Trace signals (`correct`; `authority_correction` on a miss the authority answered). Nothing on the
 learning path reads Trace.
 
 V-set episodes (`stream="v"`) are scored without the authority, never retried, never raise fires, and never
@@ -35,6 +36,7 @@ from munchhausen.domain.fire import Fire, FireCause
 from munchhausen.domain.ids import episode_id, fire_id
 from munchhausen.domain.pipeline_guard import PipelineRefused
 from munchhausen.domain.question import Question, SchemaSummary
+from munchhausen.domain.registers import EPISODE_OUTPUT, SIGNAL_AUTHORITY_CORRECTION, SIGNAL_CORRECT
 from munchhausen.domain.scoring import matches
 from munchhausen.loop.residuals import compute_residuals, guard_holds
 from munchhausen.ports.sinks import Trace
@@ -81,7 +83,8 @@ class ForwardPass:
         ids = {"episode_id": eid, "arm": self.arm.name, "idx": idx, "stream": stream}
         usage = EpisodeUsage(eid)
         token, id_token = CURRENT_EPISODE.set(usage), CURRENT_EPISODE_ID.set(eid)
-        self.trace.begin({**ids, "template": question.template})
+        self.trace.begin({**ids, "template": question.template, "persona": question.persona, "text": question.text,
+                          "run_id": self.run_id})
         answer: Answer = None
         try:
             episode = await self._run(idx, question, stream, at, eid, authority, ids, usage, t0)
@@ -107,8 +110,12 @@ class ForwardPass:
         else:
             proposal = proposed
             answer, error = await self._execute(proposal, view_map, ids)
+        self.trace.event(EPISODE_OUTPUT, {**ids, "pipeline": proposal.pipeline, "confidence": proposal.confidence})
 
         judgement = await self.world.judge(question, answer, at, with_authority=authority)
+        self.trace.signal(SIGNAL_CORRECT, judgement.correct)
+        if not judgement.correct and authority and judgement.figure is not None:
+            self.trace.signal(SIGNAL_AUTHORITY_CORRECTION, judgement.figure, comment=judgement.phrasing)
         retry_pipeline, retry_correct = None, None
         if not judgement.correct and authority and judgement.figure is not None and proposed is not None:
             retry_pipeline, retry_correct = await self._retry(question, schema, consulted, view_map, judgement)
