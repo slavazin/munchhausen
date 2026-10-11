@@ -11,7 +11,7 @@ import sys
 
 import typer
 
-SURFACES = ("world", "forward", "learn", "telemetry", "viewer")
+SURFACES = ("world", "forward", "learn", "telemetry", "viewer", "status")
 
 
 def register(app: typer.Typer) -> None:

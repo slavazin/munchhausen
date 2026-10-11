@@ -204,6 +204,13 @@ class Settings(BaseSettings):
     lens_fold_rho: float = 0.8
     lens_mint_min: int = 4
 
+    # --- operator status (`munchhausen status`) -------------------------------------------------------
+    status_window: int = 30             # rolling accuracy over the arm's last N stream episodes
+    status_interval_s: int = 60         # --watch refresh
+    status_stall_s: int = 240           # ALARM when an unfinished arm made no model call for this long
+    status_max_fail_share: float = 0.05  # ALARM when failed model calls exceed this share of the arm's calls
+    run_budget_usd: float = 60.0        # ALARM when the run's spend passes this
+
     # --- readings ------------------------------------------------------------------------------------
     bootstrap_n: int = 2000             # resamples for paired arm differences
     ci_level: float = 0.90              # interval level for every paired difference and forecast verdict

@@ -218,6 +218,12 @@ class AtlasStore:
     def source(self) -> AtlasReader:
         return AtlasReader(self.clients.source_db())
 
+    async def progress(self, run_id: str, arms: list[str]) -> dict[str, Any]:
+        """Operator snapshot of a run in flight (`store/progress.py`), read as the learner."""
+        from munchhausen.store.progress import progress
+
+        return await progress(self._db, run_id, arms, self._s.status_window)
+
     async def setup(self) -> dict[str, Any]:
         return await _setup.setup(self.clients.admin_store_db(), self._s)
 
