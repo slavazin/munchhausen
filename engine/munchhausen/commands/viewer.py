@@ -43,7 +43,7 @@ def injector_for(h: Any, arm: str) -> Any:
     return Injector(
         world=h.world(), forward_for=lambda w: forward_pass(h, arm, world=w), nominator=nominator,
         adjudicator=adjudicator, observations=h.store.observations, drafts=h.store.drafts,
-        backtests=h.store.backtests, cursors=h.store.cursors,
+        backtests=h.store.backtests, cursors=h.store.cursors, episodes=h.store.episodes,
         bar=Bar(min_obs=s.bar_min_obs, min_templates=s.bar_min_templates, min_gap=s.bar_min_gap,
                 min_matched=s.bar_min_matched),
         params=InjectParams(seed=s.inject_seed, scan_max=s.inject_scan_max, rel_tol=s.score_rel_tol),

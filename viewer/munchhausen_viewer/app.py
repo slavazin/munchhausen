@@ -90,7 +90,9 @@ def readings(paired: list[dict[str, Any]], svc: ViewerServices) -> list[dict[str
     arms = sorted({p["arm"] for p in paired})
     for arm in arms:
         rows = [p for p in paired if p["arm"] == arm]
+        last = max((p["idx"] for p in rows), default=0) + 1
         for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, last)
             d = [p["d"] for p in rows if lo <= p["idx"] < hi]
             if not d:
                 continue

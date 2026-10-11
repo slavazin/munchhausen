@@ -12,8 +12,10 @@ operator's figure, so a miss-rate gap would read the injection, not the world. T
 under `adjudication["bar"]`. The backtest still replays the case store's stream episodes against their
 confirmed figures, which is where a false figure is refused.
 
-Injection episodes are written with `stream="injection"`, so no stream reading, curve or backtest
-population counts them. Their `correct` is scored against the operator's figure and means nothing else.
+Injection episodes are written with `stream="injection"` and a negative `idx` (the next free one; the
+stream's indices are ≥ 0 and `episodes` is unique on run/arm/idx), so no stream reading, curve or backtest
+population counts them. The draft and its curation context carry the arm's current stream index.
+Their `correct` is scored against the operator's figure and means nothing else.
 
 Application layer: ports and application services only (no store, impl or world imports).
 """
@@ -23,7 +25,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from munchhausen.domain.backtest import Backtest
 from munchhausen.domain.common import Answer, LayerRole
@@ -43,7 +45,13 @@ from munchhausen.domain.question import Question, SchemaSummary
 from munchhausen.domain.scoring import matches, ratio_delta
 from munchhausen.learn.episodic import Bar, coherence_guard
 from munchhausen.ports.curation import Adjudicator, CurationContext
-from munchhausen.ports.store import BacktestRepository, CursorRepository, DraftRepository, ObservationRepository
+from munchhausen.ports.store import (
+    BacktestRepository,
+    CursorRepository,
+    DraftRepository,
+    EpisodeRepository,
+    ObservationRepository,
+)
 from munchhausen.ports.world import World
 
 INJECTION_STREAM = "injection"
@@ -167,9 +175,23 @@ class InjectionResult:
         }
 
 
+@runtime_checkable
+class InstanceSource(Protocol):
+    """A world that poses rebuildable instances of one template (S1 `PackWorld.instances`: ids
+    `t-<template>-<seed>-<k>`, which any process can rebuild, so a later backtest replay finds them)."""
+
+    def instances(self, template_id: str, seed: int, n: int) -> tuple[Question, ...]: ...
+
+
 def pick_questions(world: World, templates: Sequence[str], per_template: int, *, seed: int,
                    scan_max: int) -> list[Question]:
     """Fresh question instances on the chosen templates, from a seed the stream never uses."""
+    if isinstance(world, InstanceSource):
+        out = [q for t in templates for q in world.instances(t, seed, per_template)]
+        missing = sorted(set(templates) - {q.template for q in out})
+        if missing:
+            raise ValueError(f"no question instances found for templates {missing}")
+        return out
     want = {t: per_template for t in templates}
     out: list[Question] = []
     for k, q in enumerate(world.questions(seed)):
@@ -227,9 +249,18 @@ class Injector:
     drafts: DraftRepository
     backtests: BacktestRepository
     cursors: CursorRepository
+    episodes: EpisodeRepository                     # only to find a free injection index
     bar: Bar
     params: InjectParams
     observe: Observe | None = None                  # the observer party; None: mechanical noticing only
+
+    async def _free_idx(self, req: InjectionRequest) -> int:
+        """`episodes` is unique on (run_id, arm, idx), and stream indices are ≥ 0: injection episodes take
+        the next free negative index, so they never collide with the stream or with each other."""
+        idx = -1
+        while await self.episodes.exists(req.run_id, req.arm, idx):
+            idx -= 1
+        return idx
 
     async def run(self, req: InjectionRequest, on_step: Step | None = None) -> InjectionResult:
         async def step(name: str, **payload: Any) -> None:
@@ -248,7 +279,7 @@ class Injector:
 
         forward = self.forward_for(InjectedWorld(self.world, req.figure, req.phrasing, self.params.rel_tol))
         for q in res.questions:
-            ep = await forward.run(at_idx, q, stream=INJECTION_STREAM)
+            ep = await forward.run(await self._free_idx(req), q, stream=INJECTION_STREAM)
             res.episodes.append(ep)
             await step("episode", id=ep.id, template=ep.template, answer=ep.answer, correct=ep.correct)
 

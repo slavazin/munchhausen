@@ -408,6 +408,11 @@ class AtlasReadModel:
         ])
         if at is not None:
             rounds = [r for r in rounds if (r.get("idx_range") or [0, 0])[0] <= at]
+        if not v_points:   # V readings recorded on `rounds` only (S5's round close), placed at the round's end
+            v_points = await self._agg(C.ROUNDS, [
+                {"$match": {"run_id": run_id, "acc_v": {"$ne": None}}},
+                {"$project": {"_id": 0, "arm": 1, "idx": {"$arrayElemAt": ["$idx_range", 1]}, "acc": "$acc_v"}},
+                {"$match": _idx_le("idx", at)}, {"$sort": {"arm": 1, "idx": 1}}])
         return jsonable({"rolling": rolling, "v": v_points, "paired": paired, "rounds": rounds,
                          "reference": reference, "window": window})
 

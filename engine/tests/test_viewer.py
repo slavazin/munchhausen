@@ -223,6 +223,16 @@ class Repo:
             self.rows[i] = self.rows[i].model_copy(update={"disposition": disposition, "disposed_by": by})
 
 
+class FakeEpisodes:
+    def __init__(self) -> None:
+        self.taken: set[int] = set()
+
+    async def exists(self, run_id: str, arm: str, idx: int) -> bool:
+        hit = idx in self.taken
+        self.taken.add(idx)          # the fake forward pass writes it next
+        return hit
+
+
 class FakeCursors:
     async def get(self, run_id: str, arm: str) -> Cursor:
         return Cursor(run_id=run_id, arm=arm, next_idx=412, round=13)
@@ -267,6 +277,7 @@ def make_injector(s: Settings) -> tuple[Injector, Repo, FakeAdjudicator]:
     adj = FakeAdjudicator(bts)
     inj = Injector(world=FakeWorld(), forward_for=FakeForward, nominator=FakeNominator(), adjudicator=adj,
                    observations=obs, drafts=drafts, backtests=bts, cursors=FakeCursors(),  # type: ignore[arg-type]
+                   episodes=FakeEpisodes(),  # type: ignore[arg-type]
                    bar=Bar(min_obs=s.bar_min_obs, min_templates=s.bar_min_templates, min_gap=s.bar_min_gap,
                            min_matched=s.bar_min_matched),
                    params=InjectParams(seed=s.inject_seed, scan_max=s.inject_scan_max, rel_tol=s.score_rel_tol))
@@ -281,6 +292,16 @@ async def test_injected_world_returns_the_operators_figure() -> None:
     assert (await w.judge(q, 4242, 0, with_authority=True)).correct
 
 
+def test_pick_questions_prefers_rebuildable_instances() -> None:
+    class Posing(FakeWorld):
+        def instances(self, template_id: str, seed: int, n: int) -> tuple[Question, ...]:
+            return tuple(Question(id=f"t-{template_id}-{seed}-{k}", text="q", template=template_id, persona="ops",
+                                  collections=("customers",)) for k in range(n))
+
+    qs = pick_questions(Posing(), list(TEMPLATES[:2]), 2, seed=9, scan_max=0)   # type: ignore[arg-type]
+    assert [q.id for q in qs][:2] == [f"t-{TEMPLATES[0]}-9-0", f"t-{TEMPLATES[0]}-9-1"] and len(qs) == 4
+
+
 def test_pick_questions_refuses_unknown_template() -> None:
     with pytest.raises(ValueError, match="nope"):
         pick_questions(FakeWorld(), ["nope"], 1, seed=1, scan_max=50)   # type: ignore[arg-type]
@@ -293,6 +314,7 @@ async def test_injection_ends_with_the_backtest_record(s: Settings) -> None:
                            phrasing="active customers", per_template=1)
     res = await inj.run(req, lambda name, payload: steps.append(name))
     assert all(e.stream == INJECTION_STREAM and e.figure == 4242 for e in res.episodes)
+    assert sorted(e.idx for e in res.episodes) == [-2, -1]          # unique, never a stream index
     assert len(res.observations) == 2 and all(o.via is Via.INJECTION for o in obs.rows.values())
     assert all(o.surfaces.phrasing == "active customers" for o in res.observations)
     assert all(o.disposition is ObservationDisposition.SPENT for o in obs.rows.values())   # refused → spent

@@ -351,7 +351,10 @@ async def seed(store: object, sr: SyntheticRun, *, concurrency: int = 32) -> dic
 
     s = store
     await s.runs.start(sr.run)  # type: ignore[attr-defined]
-    await asyncio.gather(*(put(s.episodes, e) for e in sr.episodes))  # type: ignore[attr-defined]
+    # `episodes` is unique on (run_id, arm, idx): V episodes share their idx with stream episodes, so the
+    # seed writes V readings only through `rounds.acc_v` (the in-memory model keeps the V episodes).
+    stream = [e for e in sr.episodes if e.stream == "stream"]
+    await asyncio.gather(*(put(s.episodes, e) for e in stream))  # type: ignore[attr-defined]
     await asyncio.gather(*(put(s.observations, o) for o in sr.observations))  # type: ignore[attr-defined]
     await asyncio.gather(*(put(s.drafts, d) for d in sr.drafts))  # type: ignore[attr-defined]
     await asyncio.gather(*(put(s.backtests, b) for b in sr.backtests))  # type: ignore[attr-defined]
@@ -363,6 +366,6 @@ async def seed(store: object, sr: SyntheticRun, *, concurrency: int = 32) -> dic
         if existing is not None:
             continue
         await getattr(s.decisions, verb)(plan)  # type: ignore[attr-defined]
-    return {"episodes": len(sr.episodes), "observations": len(sr.observations), "drafts": len(sr.drafts),
+    return {"episodes": len(stream), "observations": len(sr.observations), "drafts": len(sr.drafts),
             "backtests": len(sr.backtests), "fires": len(sr.fires), "rounds": len(sr.rounds),
             "decisions": len(sr.admissions)}
