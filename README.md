@@ -80,6 +80,23 @@ every figure's population and query: [`docs/evidence/run-a`](docs/evidence/run-a
   admitted by `ungated`, where it superseded the correct rule and took it from 36/40 to 29/40 on the sealed set.
   One demonstration per arm, not a statistic.
 
+### Where the data lives
+
+The reports in [`docs/evidence/`](docs/evidence/) carry every figure with its population, n, interval and the
+query that produced it. The raw records behind them stay in the project's **MongoDB Atlas cluster**, which is
+private; organizers can be given read access to confirm any reading.
+
+| Database | What it holds |
+|---|---|
+| `munchhausen` | everything a run writes, keyed by `run_id` (`run-a`, `run-b`; also `rehearsal-1`): `runs` (registered knobs, forecasts, pack hash, git commit), `episodes` (every answer, stream and sealed V set), `observations`, `drafts`, `backtests` (each sampled replay), `decisions` (with lifecycle and lineage), `fires`, `tool_access`, `rounds`, `planted_map`, and `spend` (one row per model call) |
+| `world` | the dataset the agents query, built deterministically from Atlas's public `sample_analytics` (`munchhausen build-world`) |
+| `truth` | gold answers and hidden quirk tags; readable only by the evaluator role |
+
+With access, `uv run munchhausen report run-a` regenerates a report from these records. Records written after
+the runs ended are labelled: the two injected lies (`stream: "injection"`) and the end-of-run V reads (`v_at`
+598–600; see [`CARRY_FORWARD.md`](CARRY_FORWARD.md) § 00d). The `git_sha` in each run record predates a history
+rewrite that scrubbed local paths; each rewritten commit differs from the one it names only in those scrubbed documentation lines.
+
 ## Key features
 
 **Governance**
