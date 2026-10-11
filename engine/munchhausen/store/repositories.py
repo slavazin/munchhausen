@@ -294,16 +294,17 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
     """The round record, computed in Atlas and `$merge`d into `rounds` (SPEC § 20.2). Run over `episodes`.
 
     Populations: stream accuracy, self-assessed accuracy and the calibration gap over stream episodes with
-    `idx` in `idx_range` (inclusive); V accuracy over `stream: "v"` episodes whose `v_at` (else `idx`) is in
+    `idx` in `idx_range` (half-open: lo ≤ idx < hi, as the runner emits it);
+    V accuracy over `stream: "v"` episodes whose `v_at` (else `idx`) is in
     range; lifecycle counts from `drafts` of this round (admitted/refused) and from `decisions` whose
     `lifecycle.at_idx` is in range (superseded/moot/retired/converged); fires by role with `at_idx` in range;
     `usd_cum` = the arm's spend so far, `usd` = `usd_cum` − the previous round's `usd_cum`."""
     lo, hi = idx_range
-    in_range = {"$gte": lo, "$lte": hi}
+    in_range = {"$gte": lo, "$lt": hi}
     is_stream = {"$eq": ["$stream", "stream"]}
     v_at = {"$ifNull": ["$v_at", "$idx"]}
-    is_v = {"$and": [{"$eq": ["$stream", "v"]}, {"$gte": [v_at, lo]}, {"$lte": [v_at, hi]}]}
-    in_idx = {"$and": [{"$gte": ["$idx", lo]}, {"$lte": ["$idx", hi]}]}
+    is_v = {"$and": [{"$eq": ["$stream", "v"]}, {"$gte": [v_at, lo]}, {"$lt": [v_at, hi]}]}
+    in_idx = {"$and": [{"$gte": ["$idx", lo]}, {"$lt": ["$idx", hi]}]}
     stream_in = {"$and": [is_stream, in_idx]}
 
     def when(cond: Any, val: Any) -> Doc:

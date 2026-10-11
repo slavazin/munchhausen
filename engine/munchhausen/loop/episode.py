@@ -108,7 +108,7 @@ class ForwardPass:
             phrasing=judgement.phrasing, confirmed_figure=confirmed_figure(answer, judgement)
             if authority else None, retry_pipeline=retry_pipeline, retry_correct=retry_correct,
             residuals=residuals, error=error, latency_ms=int((time.monotonic() - t0) * 1000), stream=stream,
-            collections=question.collections,
+            collections=question.collections, v_at=at if stream == V else None,
         )
         await self.store.episodes.put(episode)
         self.trace.event("episode_written", {**ids, "correct": episode.correct, "error": error,

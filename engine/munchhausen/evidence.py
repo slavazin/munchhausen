@@ -136,7 +136,7 @@ async def start_run(h: Any) -> RunRecord:
 
 
 async def close_round(h: Any, arm: str, round_: int, idx_range: tuple[int, int]) -> None:
-    """`$merge` the round's record into `rounds` (computed in Atlas). `idx_range` = (first, last), inclusive."""
+    """`$merge` the round's record into `rounds` (computed in Atlas). `idx_range` = (lo, hi), half-open."""
     await h.store.runs.merge_round(h.settings.run_id, arm, round_, idx_range)
     _trace(h, "round_close", {"arm": arm, "round": round_, "idx": idx_range[1]})
 

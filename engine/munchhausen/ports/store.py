@@ -218,7 +218,7 @@ class RunRepository(Protocol):
 
     async def merge_round(self, run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> None:
         """`$merge` the round's record into `rounds`, computed in Atlas over `episodes`, `drafts`,
-        `decisions`, `fires` and `spend`. `idx_range` is (first, last), both inclusive."""
+        `decisions`, `fires` and `spend`. `idx_range` is (lo, hi), half-open."""
         ...
 
 

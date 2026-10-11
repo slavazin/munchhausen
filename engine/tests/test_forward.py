@@ -534,9 +534,14 @@ def test_missing_voyage_key_selects_the_null_ports(settings_offline: Settings) -
     assert effective_name("representation", "voyage-4", keyed) == "voyage-4"
 
 
-def test_round_hook_tolerates_unbuilt_seams(settings_offline: Settings) -> None:
+def test_round_hook_tolerates_unbuilt_seams(settings_offline: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from munchhausen import evidence
     from munchhausen.bootstrap import Harness
 
+    async def unbuilt(*a: object, **k: object) -> None:
+        raise NotImplementedError("seam not built")
+
+    monkeypatch.setattr(evidence, "close_round", unbuilt)
     h = Harness(settings=settings_offline, store=FakeStore(), arms=settings_offline.arms())  # type: ignore[arg-type]
     for name in ("frozen", "governed"):
         run(h.round_hook(name)(0, (0, 30)))     # NotImplementedError from S4/S5 seams is logged, not raised

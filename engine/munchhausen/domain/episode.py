@@ -77,6 +77,7 @@ class Episode(Record):
     latency_ms: int = 0
     stream: str = "stream"                 # stream | v | injection
     collections: tuple[str, ...] = ()      # the template's logical collections: a replay rebuilds the Question
+    v_at: int | None = None                # V episodes: stream index of their V point
 
 
 # Fields a learner in an arm without an authority must never read (SPEC § 5: self_ref self-grades).
