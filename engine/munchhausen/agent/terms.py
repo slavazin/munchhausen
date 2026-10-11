@@ -70,11 +70,14 @@ def present_terms(text: str, rows: Iterable[Term]) -> frozenset[str]:
 
 
 def schema_terms(schema: SchemaSummary) -> list[str]:
-    """Collection and field names as lower-case phrases (`tier_and_details` → "tier and details")."""
+    """Collection names and every segment of the dotted field paths as lower-case phrases
+    (`tier_and_details.$key.tier` → "tier and details", "tier"). Map-key placeholders (`$key`) and
+    underscore-led names (`_id`) are skipped. Names only: the types never enter the vocabulary."""
     out: list[str] = []
     for coll, fields in schema.collections.items():
         out.append(_phrase(coll))
-        out += [_phrase(f) for f in fields if not f.startswith("_")]
+        for path in fields:
+            out += [_phrase(seg) for seg in path.split(".") if seg and not seg.startswith(("_", "$"))]
     return [t for t in dict.fromkeys(out) if t and len(t) > 1]
 
 

@@ -100,6 +100,9 @@ def user_prompt(inp: ProposerInput) -> str:
 
 
 async def run(llm: LLM, settings: Settings, inp: ProposerInput) -> Proposal:
+    """`temperature` reaches `LLM.parse` when it accepts one. anthropic 1.13's `messages.parse` has no
+    sampling parameters, so the shared call path must send it as `extra_body={"temperature": t}` (verified
+    live on claude-haiku-4-5)."""
     kwargs: dict[str, Any] = {}
     if _accepts(llm, "temperature"):
         kwargs["temperature"] = settings.proposer_temperature

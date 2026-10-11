@@ -70,7 +70,8 @@ class GuardedReader(AtlasReader):
 
     async def _targets(self, wanted: set[str]) -> frozenset[str]:
         if self._names is None or not wanted <= self._names:
-            self._names = frozenset(await self._db.list_collection_names())
+            self._names = frozenset(n for n in await self._db.list_collection_names()
+                                    if not n.startswith("system."))   # view definitions are not data
         return self._names
 
     async def aggregate(self, collection: str, pipeline: Pipeline, *, max_time_ms: int) -> list[Doc]:
