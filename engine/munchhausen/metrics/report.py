@@ -21,7 +21,8 @@ VERDICT_TEXT = {
     "within": "within the margin: the reading does not resolve the forecast at this margin",
     "agrees": "the reading agrees with the forecast",
     "disagrees": "the reading disagrees with the forecast",
-    "unread": "unread: the reading's inputs are missing (see note)",
+    "unread": "unread: the reading's inputs are missing or an arm did not resolve (see note)",
+    "unread (proxy)": "unread (proxy): the population is a proxy (no planted map), so no verdict is claimed",
 }
 
 
@@ -57,6 +58,18 @@ def knob_diff(this: Mapping[str, Any], other: Mapping[str, Any]) -> list[dict[st
     return [{"knob": k, "this": this.get(k), "other": other.get(k)} for k in keys if this.get(k) != other.get(k)]
 
 
+RUN_FIELDS_DIFFED = ("git_sha", "ports", "arm_specs", "forecast_register", "prompt_hashes", "pack_hash", "length")
+
+
+def run_diff(this: Mapping[str, Any], other: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Knobs that moved, plus every registered field that moved (sha, ports, arm specs, forecasts, prompt
+    hashes, pack hash, length): the pilot rule's diff (SPEC § 11)."""
+    out = knob_diff(this.get("knobs", {}), other.get("knobs", {}))
+    out += [{"knob": f, "this": this.get(f), "other": other.get(f)} for f in RUN_FIELDS_DIFFED
+            if this.get(f) != other.get(f)]
+    return out
+
+
 def _verdicts(f: Mapping[str, Any]) -> list[tuple[str, str]]:
     v = f.get("verdict")
     return list(v.items()) if isinstance(v, dict) else [(f["id"], v)]
@@ -71,8 +84,19 @@ def markdown(readings: Mapping[str, Any], run: Mapping[str, Any], *, against: Ma
                f"{' (dirty)' if run.get('git_dirty') else ''}; isolation `{run.get('isolation', '—')}`; "
                f"pack hash `{(run.get('pack_hash') or '—')[:12]}`; arms read: {', '.join(readings['arms']) or 'none'}.")
     out.append("")
-    out.append(f"Anthropic auth mode: `{run.get('auth_mode', '—')}` (presence only).")
+    out.append(f"Anthropic auth mode: `{run.get('auth_mode', '—')}` (presence only); run length "
+               f"{run.get('length') or 'RUN_LENGTH'}; spend rows lost: {run.get('lost_spend_writes', 0)}.")
     out.append("")
+    for n in readings.get("notes", []):
+        out.append(f"> Note: {n}.")
+    if readings.get("notes"):
+        out.append("")
+    for i, r in enumerate(run.get("resumes") or [], 1):
+        moved = ", ".join(sorted(r.get("moved", {})))
+        out.append(f"> Resume {i} at {r.get('at')}: moved since registration: {moved or 'nothing'} "
+                   "(registered forecasts and knobs hold).")
+    if run.get("resumes"):
+        out.append("")
     if run.get("models") or run.get("models_served"):
         out.append("| model knob | configured |")
         out.append("|---|---|")
@@ -101,6 +125,16 @@ def markdown(readings: Mapping[str, Any], run: Mapping[str, Any], *, against: Ma
             out.append(f"- **Verdict** `{name}`: {VERDICT_TEXT.get(v, v)}.")
         if f.get("note"):
             out.append(f"- Note: {f['note']}.")
+        out.append("")
+    if readings.get("paired_curves"):
+        out.append(f"## Paired difference against `{readings.get('reference')}` (rolling, by stream index)")
+        out.append("")
+        out.append("| arm | idx | difference | interval | n pairs |")
+        out.append("|---|---|---|---|---|")
+        for arm, pts in readings["paired_curves"].items():
+            for p_ in pts:
+                out.append(f"| {arm} | {p_['idx_lo']}–{p_['idx_hi']} | {fmt(p_['diff'])} | "
+                           f"[{fmt(p_['lo'])}, {fmt(p_['hi'])}] | {p_['n']} |")
         out.append("")
     out.append("## Readings")
     out.append("")
@@ -141,7 +175,7 @@ def markdown(readings: Mapping[str, Any], run: Mapping[str, Any], *, against: Ma
                        f"{s['tokens_in']} | {s['tokens_out']} | {s['usd']:.4f} |")
         out.append("")
     if against is not None:
-        diff = knob_diff(run.get("knobs", {}), against.get("knobs", {}))
+        diff = run_diff(run, against)
         out.append(f"## Knob diff against run `{against.get('_id')}`")
         out.append("")
         if diff:
@@ -175,6 +209,11 @@ def manifest(readings: Mapping[str, Any], run_id: str) -> dict[str, Any]:
             figs[f"forecast.{f['id']}.{r['name']}"] = {"query": r["query"], "n": r["n"], "unit": r["unit"]}
     for r in readings["readings"]:
         figs[r["name"]] = {"query": r["query"], "n": r["n"], "unit": r["unit"]}
+    ref = readings.get("reference")
+    for arm, pts in (readings.get("paired_curves") or {}).items():
+        figs[f"curve.paired_vs_{ref}.{arm}"] = {
+            "query": f"munchhausen.episodes.find({{run_id: '{run_id}', arm: {{$in: ['{arm}', '{ref}']}}, stream: 'stream'}}) | metrics.readings.rolling_paired",
+            "n": sum(p["n"] for p in pts), "unit": "accuracy (fraction), paired difference"}
     figs["timeline"] = {"query": f"munchhausen.decisions.find({{run_id: '{run_id}'}}) + fires | metrics.readings.timeline",
                         "n": len(readings["timeline"]), "unit": "records"}
     figs["spend"] = {"query": "munchhausen.spend.aggregate($match meta.run_id; $group arm × stage × model)",
@@ -222,7 +261,8 @@ def _interval_svg(r: Mapping[str, Any], margin: float) -> str:
 def html_report(readings: Mapping[str, Any], run: Mapping[str, Any], md_sentences: Sequence[str] = (), *,
                 chartjs_url: str) -> str:
     e = html.escape
-    data = json.dumps({"curves": readings["curves"], "v": readings["v_points"], "drifts": readings["drifts"]})
+    data = json.dumps({"curves": readings["curves"], "v": readings["v_points"], "drifts": readings["drifts"],
+                       "paired": readings.get("paired_curves") or {}})
     parts = [f"<!doctype html><html lang=en><head><meta charset=utf-8>"
              f"<meta name=viewport content='width=device-width,initial-scale=1'><title>Evidence {e(readings['run_id'])}</title>"
              f"<style>{_CSS}</style><script src='{e(chartjs_url)}'></script></head><body><main>"]
@@ -233,7 +273,8 @@ def html_report(readings: Mapping[str, Any], run: Mapping[str, Any], md_sentence
                  + (f"<p class=card><b>{e(readings['note'])}</b></p>" if readings.get("note") else ""))
     parts.append("<h2>Curves</h2><div class=grid>"
                  "<div class=card><b>Stream accuracy per round</b> <span class=mut>(fraction; stream episodes; dashed: drifts)</span><canvas id=acc></canvas></div>"
-                 "<div class=card><b>Calibration gap per round</b> <span class=mut>(mean confidence − accuracy)</span><canvas id=gap></canvas></div></div>")
+                 "<div class=card><b>Calibration gap per round</b> <span class=mut>(mean confidence − accuracy)</span><canvas id=gap></canvas></div>"
+                 f"<div class=card><b>Paired difference vs {e(str(readings.get('reference') or '—'))}</b> <span class=mut>(accuracy, rolling window; dashed: interval)</span><canvas id=pair></canvas></div></div>")
     parts.append("<h2>Forecasts beside their readings</h2>")
     for f in readings["forecasts"]:
         rows = []
@@ -283,5 +324,12 @@ Object.entries(D.drifts).forEach(([d,at])=>ds.push({label:d,data:[{x:at,y:lo},{x
 new Chart(document.getElementById(id),{type:'line',data:{datasets:ds},options:{animation:false,parsing:true,
 scales:{x:{type:'linear',title:{display:true,text:'stream idx',color:mut},ticks:{color:mut}},y:{min:lo,max:hi,ticks:{color:mut}}},
 plugins:{legend:{labels:{color:fg,boxWidth:10}}}}})}
-chart('acc','acc',0,1);chart('gap','gap',-0.5,1);})();
+chart('acc','acc',0,1);chart('gap','gap',-0.5,1);
+const pd=[];Object.entries(D.paired).forEach(([arm,pts],i)=>{const c=pal[(i+1)%pal.length];
+pd.push({label:arm,data:pts.map(p=>({x:p.idx_hi,y:p.diff})),borderColor:c,backgroundColor:c,pointRadius:1.5,borderWidth:1.6});
+pd.push({label:arm+' lo',data:pts.map(p=>({x:p.idx_hi,y:p.lo})),borderColor:c,borderWidth:0.6,pointRadius:0,borderDash:[2,2]});
+pd.push({label:arm+' hi',data:pts.map(p=>({x:p.idx_hi,y:p.hi})),borderColor:c,borderWidth:0.6,pointRadius:0,borderDash:[2,2]});});
+Object.entries(D.drifts).forEach(([d,at])=>pd.push({label:d,data:[{x:at,y:-1},{x:at,y:1}],borderColor:mut,borderDash:[4,4],pointRadius:0,borderWidth:1}));
+new Chart(document.getElementById('pair'),{type:'line',data:{datasets:pd},options:{animation:false,
+scales:{x:{type:'linear',ticks:{color:mut}},y:{min:-1,max:1,ticks:{color:mut}}},plugins:{legend:{labels:{color:fg,boxWidth:10,filter:i=>!/ (lo|hi)$/.test(i.text)}}}}});})();
 """

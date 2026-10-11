@@ -257,8 +257,14 @@ class RunRepository(Protocol):
 
     async def list_runs(self, limit: int) -> list[RunRecord]: ...
 
-    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None) -> None:
-        """Stamp `ended_at` and `models_served`: the only fields of a run record written after its start."""
+    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None,
+                     lost_spend_writes: int = 0) -> None:
+        """Stamp `ended_at`, `models_served`, `lost_spend_writes`. With `resumes[]`, the only fields of a run
+        record written after its start."""
+        ...
+
+    async def append_resume(self, run_id: str, entry: dict[str, Any]) -> None:
+        """Append one entry to `resumes[]` (what moved since registration). Never edits registered fields."""
         ...
 
     async def merge_round(self, run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> None:
