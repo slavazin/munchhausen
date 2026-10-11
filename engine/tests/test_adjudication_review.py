@@ -160,3 +160,26 @@ def test_an_admission_error_is_recorded_on_the_draft_not_raised() -> None:
     out = run(w.adjudicator().adjudicate(d1, w.ctx()))
     assert out[-1].layer == "admission" and out[-1].verdict is Verdict.HOLD
     assert w.store.st.drafts["d-floor"].status is DraftStatus.HELD and not w.store.st.decisions
+
+
+def test_holdout_templates_get_reserved_sample_slots_hits_and_misses() -> None:
+    w = World(n_per_template=8)
+    for i in range(40):                       # crowd the population so the held-out template would be rare
+        w.add(episode(300 + i, "t1", correct=i % 2 == 0, figure=float(i)))
+    d = draft("d-gen", RULE, w.sources).model_copy(update={"holdout_templates": ("t4",)})
+    b = w.backtester()
+    b.holdout_share = 0.25
+    bt = run(b.run(d, w.ctx())).backtest
+    held = [s for s in bt.sampled if s.template == "t4"]
+    assert bt.holdout_reserved == 2 and bt.holdout_available == 2 and len(bt.sampled) == 8
+    assert len(held) >= 2 and {s.original_correct for s in held} == {True, False}
+    assert bt.fixed_heldout >= 1
+
+
+def test_holdout_short_population_records_what_it_had() -> None:
+    w = World()
+    d = draft("d-gen", RULE, w.sources).model_copy(update={"holdout_templates": ("t9",)})
+    bt = run(w.backtester().run(d, w.ctx())).backtest
+    assert bt.holdout_reserved == 2 and bt.holdout_available == 0 and len(bt.sampled) == 8
+    no_fold = run(w.backtester().run(draft("d-plain", RULE, w.sources), w.ctx())).backtest
+    assert no_fold.holdout_reserved == 0 and no_fold.holdout_available is None

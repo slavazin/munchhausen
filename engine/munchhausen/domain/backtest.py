@@ -57,6 +57,8 @@ class Backtest(Record):
     verdict: BacktestVerdict
     errors: tuple[str, ...] = ()      # pairs dropped because a replay or consultation raised
     at_idx: int | None = None         # the adjudication index this read belongs to
+    holdout_reserved: int = 0         # sample slots reserved for the draft's held-out templates
+    holdout_available: int | None = None   # held-out episodes the population supplied (≤ reserved); None: no fold
 
     @classmethod
     def read(
@@ -71,6 +73,8 @@ class Backtest(Record):
         thresholds: BacktestThresholds,
         errors: tuple[str, ...] = (),
         at_idx: int | None = None,
+        holdout_reserved: int = 0,
+        holdout_available: int | None = None,
     ) -> Backtest:
         """Admit on `fixed ≥ min ∧ fixed − broken ≥ min ∧ fixed_heldout ≥ min ∧ broken ≤ max`; fewer than
         `min_n` scored pairs is INSUFFICIENT (the backtest could not read, so it neither admits nor refuses)."""
@@ -89,5 +93,6 @@ class Backtest(Record):
         return cls(
             _id=id, run_id=run_id, arm=arm, draft_id=draft_id, sampled=sampled,
             source_templates=source_templates, fixed=len(fixed), fixed_heldout=fixed_heldout, broken=broken,
-            verdict=verdict, errors=errors, at_idx=at_idx,
+            verdict=verdict, errors=errors, at_idx=at_idx, holdout_reserved=holdout_reserved,
+            holdout_available=holdout_available,
         )

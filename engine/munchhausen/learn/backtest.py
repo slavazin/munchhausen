@@ -32,6 +32,7 @@ reproduces itself out of sample and passes (§ 0, § 7.4).
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -154,6 +155,7 @@ class BacktestRun:
             "misses_sampled": len(misses), "misses_fixed": sum(1 for s in misses if s.fixed),
             "source_templates": sorted(bt.source_templates), "after_idx": self.population_after_idx,
             "calls": self.calls, "errors": self.errors or len(bt.errors), "applied": self.applied,
+            "holdout_reserved": bt.holdout_reserved, "holdout_available": bt.holdout_available,
             "hook_mismatch": self.hook_mismatch, "reason": self.reason or ("insufficient" if self.insufficient
                                                                            else None),
             "reused": self.reused,
@@ -180,6 +182,7 @@ class Backtester:
     question_of: Callable[[Episode], Question] = episode_question   # the episode's legible fields suffice; the
     #                     composition root may point this at the world's id-based rebuild once the port has one
     recent: int | None = None     # BACKTEST_RECENT: a new draft reads only the last N episodes
+    holdout_share: float = 0.25   # BACKTEST_HOLDOUT_SHARE: slots reserved for the draft's held-out templates
 
     async def run(self, draft: Draft, ctx: CurationContext) -> BacktestRun:
         bid = read_id(draft.id, ctx.at_idx)
@@ -206,13 +209,12 @@ class Backtester:
             after_idx = ctx.at_idx - self.recent - 1 if ctx.at_idx > self.recent else None
 
         sampled: list[Episode] = []
-        mismatch = 0
+        mismatch, reserved, available = 0, 0, None
         if reason is None:
             match = population_filter(draft.hook, exclude_ids=sorted(seen_ids),
                                       exclude_questions=sorted({e.question_id for e in seen}),
                                       exclude_texts=sorted({e.text for e in seen}), after_idx=after_idx)
-            drawn = await self.episodes.backtest_sample(draft.run_id, draft.arm, match, n=self.n, seed=self.seed,
-                                                        prefer_terms=tuple(draft.hook.fires_when.terms))
+            drawn, reserved, available = await self._draw(draft, match)
             sampled = [e for e in drawn if draft.hook.matches(episode_keys(e))]
             mismatch = len(drawn) - len(sampled)
             if not sampled:
@@ -229,7 +231,7 @@ class Backtester:
         errors = tuple(f"{r['episode_id']}: {r['error']}" for s, r in results if s is None)
         bt = Backtest.read(id=bid, run_id=draft.run_id, arm=draft.arm, draft_id=draft.id, sampled=samples,
                            source_templates=source_templates, thresholds=self.thresholds, errors=errors,
-                           at_idx=ctx.at_idx)
+                           at_idx=ctx.at_idx, holdout_reserved=reserved, holdout_available=available)
         await self.backtests.put(bt)
         run = BacktestRun(backtest=bt, population_after_idx=after_idx, calls=2 * len(sampled), errors=len(errors),
                           applied=sum(1 for r in replays if r.get("applied")), hook_mismatch=mismatch,
@@ -238,6 +240,25 @@ class Backtester:
             self.trace.event("backtest", {"draft_id": draft.id, "arm": draft.arm, **run.detail(),
                                           "replays": list(replays)})
         return run
+
+    async def _draw(self, draft: Draft, match: dict[str, Any]) -> tuple[list[Episode], int, int | None]:
+        """The sample. With a held-out template fold (`draft.holdout_templates`), ceil(n · HOLDOUT_SHARE)
+        slots go first to episodes of those templates (hits and misses, misses first), so `fixed_heldout`
+        has episodes to read; the rest is drawn as usual. A population short of held-out episodes gives what
+        it has, recorded as `holdout_available`."""
+        terms = tuple(draft.hook.fires_when.terms)
+        held: list[Episode] = []
+        reserved, available = 0, None
+        if draft.holdout_templates and "$nin" in match.get("_id", {}):
+            reserved = min(self.n, math.ceil(self.n * self.holdout_share))
+            hmatch = {**match, "template": {"$in": sorted(draft.holdout_templates)}}
+            held = await self.episodes.backtest_sample(draft.run_id, draft.arm, hmatch, n=reserved, seed=self.seed,
+                                                       prefer_terms=terms)
+            available = len(held)
+            match = {**match, "_id": {"$nin": sorted(set(match["_id"]["$nin"]) | {e.id for e in held})}}
+        rest = await self.episodes.backtest_sample(draft.run_id, draft.arm, match, n=self.n - len(held),
+                                                   seed=self.seed, prefer_terms=terms)
+        return held + rest, reserved, available
 
     async def _pair(self, e: Episode, candidate: Decision, excluded: frozenset[str], view_map: dict[str, str],
                     sem: asyncio.Semaphore) -> tuple[BacktestSample | None, dict[str, Any]]:

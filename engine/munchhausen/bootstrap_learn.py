@@ -99,7 +99,8 @@ def backtester_for(h: Any, arm: str) -> Backtester:
             max_time_ms=s.execute_max_time_ms, backtests=store.backtests, tool_access=store.tool_access,
             schema=lambda: h.world().schema_summary(),
             seed=s.backtest_seed if s.backtest_sample == "hashed" else None,
-            concurrency=s.backtest_concurrency, trace=_trace(h), recent=s.backtest_recent)
+            concurrency=s.backtest_concurrency, trace=_trace(h), recent=s.backtest_recent,
+            holdout_share=s.backtest_holdout_share)
     return cache["backtester"]
 
 
@@ -153,10 +154,23 @@ def _representation(h: Any, arm: str) -> Any:
     return rep if getattr(rep, "dim", 0) else None
 
 
-def _deps(h: Any, arm: str) -> dict[str, Any]:
-    """Everything a backward collaborator of another surface may ask for, by field name."""
+def knob_deps(s: Any) -> dict[str, Any]:
+    """Every knob a backward collaborator of another surface takes, under the field name it uses. A field
+    left at its dataclass default silently ignores its knob (smoke-2: the direction read ran cumulative), so
+    each one is named here and `tests/test_knob_wiring.py` checks it arrives."""
     from munchhausen.learn.episodic import Bar
 
+    return {
+        "bar": Bar.from_settings(s), "round_size": s.round_size, "carry_rounds": s.carry_rounds,
+        "direction_window": s.direction_window, "holdout_templates": s.holdout_templates,
+        "min_templates_floor": s.bar_min_templates_floor, "holdout_seed": s.stream_seed,
+        "neighbour_k": s.neighbour_k, "residual_window": s.nominator_residual_window, "embed_mask": s.embed_mask,
+        "leak_min_abs": s.leak_min_abs,
+    }
+
+
+def _deps(h: Any, arm: str) -> dict[str, Any]:
+    """Everything a backward collaborator of another surface may ask for, by field name."""
     s, store, spec = h.settings, h.store, h.arms[arm]
     deps: dict[str, Any] = {
         "run_id": s.run_id, "arm": arm, "spec": spec, "arm_spec": spec, "settings": s, "store": store,
@@ -166,11 +180,8 @@ def _deps(h: Any, arm: str) -> dict[str, Any]:
         "representation": h.port(arm, "representation"), "similarity": h.port(arm, "similarity"),
         "reranker": h.port(arm, "reranker"), "grouper": h.port(arm, "grouper"),
         "signal_source": h.shared("signal_source", s.signal_source_impl),
-        "bar": Bar(min_obs=s.bar_min_obs, min_templates=s.bar_min_templates, min_gap=s.bar_min_gap,
-                   min_matched=s.bar_min_matched),
-        "neighbour_k": s.neighbour_k, "carry_rounds": s.carry_rounds, "authority": spec.authority,
-        "with_authority": spec.authority, "lifecycle": lifecycle_for(h, arm), "round_size": s.round_size,
-        "embed_mask": s.embed_mask, "residual_window": getattr(s, "nominator_residual_window", s.fire_window),
+        "authority": spec.authority, "with_authority": spec.authority, "lifecycle": lifecycle_for(h, arm),
+        **knob_deps(s),
     }
     if spec.curator is not None:
         deps["curator"] = curator_for(h, arm)

@@ -161,6 +161,7 @@ class Settings(BaseSettings):
     backtest_sample: Literal["hashed", "random"] = "hashed"   # hashed: `$facet` + seeded hash order (replayable)
     backtest_seed: int = 17             # seed of the hashed balanced sample
     backtest_concurrency: int = 4       # paired replays in flight per backtest (2 × BACKTEST_N calls in total)
+    backtest_holdout_share: float = 0.25   # sample share reserved for a draft's held-out templates (ceil)
     backtest_min_n: int = 4             # scored pairs below this: L4 holds (`insufficient`), never refuses
     backtest_recent: int | None = 300   # a new draft's population: the last N episodes (None: all); a
     #                                     supersede reads from the predecessor's fire instead
