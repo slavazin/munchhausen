@@ -27,7 +27,8 @@ class ViewerServices:
     settings: Settings
     read_model: ReadModel
     arms: dict[str, ArmSpec]
-    injector_for: Callable[[str], Injector] | None = None   # may raise NotImplementedError until M2/M3 land
+    # may raise NotImplementedError until M2/M3 land; the Atlas one is async (it loads the world's schema first)
+    injector_for: Callable[[str], Injector | Awaitable[Injector]] | None = None
     owner: Callable[[], OwnerPort] | None = None            # built lazily; may raise NotImplementedError
     close: Callable[[], Awaitable[None]] | None = None
     mode: str = "atlas"                                      # atlas | synthetic (shown in the header)

@@ -39,6 +39,13 @@ def injector_for(h: Any, arm: str) -> Any:
         observe=models.observe, trace=h.trace())
 
 
+async def ready_injector(h: Any, arm: str) -> Any:
+    """The injector over a World whose schema summary is loaded (`Harness.ready_world`, as the run path does):
+    the viewer process never ran `build-world`, so a bare `h.world()` has no summary to pick questions from."""
+    await h.ready_world()
+    return injector_for(h, arm)
+
+
 def atlas_services(s: Settings) -> Any:
     from munchhausen import bootstrap_learn
     from munchhausen.bootstrap import build_port, harness
@@ -47,7 +54,7 @@ def atlas_services(s: Settings) -> Any:
     h = harness(s)
     return ViewerServices(
         settings=s, read_model=build_port("read_model", s.store_impl, s, h.store), arms=h.arms,
-        injector_for=lambda arm: injector_for(h, arm), owner=lambda: bootstrap_learn.owner_port(h),
+        injector_for=lambda arm: ready_injector(h, arm), owner=lambda: bootstrap_learn.owner_port(h),
         close=h.close, mode="atlas")
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -277,6 +278,8 @@ def create_app(svc: ViewerServices | None = None) -> FastAPI:
         async def go() -> None:
             try:
                 injector = v.injector_for(arm)   # type: ignore[misc]
+                if inspect.isawaitable(injector):   # the Atlas injector loads the world's schema first
+                    injector = await injector
                 res = await injector.run(req, on_step)
                 job["result"], job["status"] = res.summary(), "done"
             except NotImplementedError as e:

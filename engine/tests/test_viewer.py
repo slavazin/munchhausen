@@ -526,3 +526,23 @@ async def test_owner_port_refuses_admitting_injected_evidence(s: Settings) -> No
 
     with pytest.raises(OwnerRefused, match="injected"):
         await owner_port(H()).dispose_draft(draft.id, "admit", "")
+
+
+def test_atlas_injector_loads_the_world_schema_first(s: Settings) -> None:
+    """Run A demo: the viewer process never builds the world, so `h.world()` had no schema summary and the
+    injection beat failed in `pick_questions`. `ready_injector` loads it (as the run path does) first."""
+    from munchhausen.commands import viewer as V
+
+    calls: list[str] = []
+
+    class H:
+        async def ready_world(self) -> None:
+            calls.append("ready_world")
+
+    orig = V.injector_for
+    V.injector_for = lambda h, arm: calls.append(f"injector:{arm}") or "inj"  # type: ignore[assignment]
+    try:
+        assert asyncio.run(V.ready_injector(H(), "governed")) == "inj"
+    finally:
+        V.injector_for = orig  # type: ignore[assignment]
+    assert calls == ["ready_world", "injector:governed"]
