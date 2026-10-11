@@ -191,6 +191,16 @@ def test_run_record_never_holds_a_secret(tmp_path: Any) -> None:
 def test_oauth_client_and_auth_mode_presence_only(tmp_path: Any) -> None:
     from munchhausen.impl.models_anthropic import client_kwargs
 
+    ws = Settings(_env_file=None, var_dir=tmp_path, anthropic_api_key="sk-SECRET-5", anthropic_workspace_id="wrk-ID-6",
+                  anthropic_auth_token="tok-SECRET-4")
+    assert ws.anthropic_auth_mode() == "api_key_workspace"
+    assert client_kwargs(ws)["default_headers"] == {"anthropic-workspace-id": "wrk-ID-6"}
+    rec_ws = evidence.build_run_record(ws, selection={}, capabilities={}, git=(None, None), prompts={},
+                                       pack_hash=None, world_counts={}, now=datetime.now(UTC))
+    blob_ws = json.dumps(rec_ws.model_dump(mode="json", by_alias=True))
+    assert "wrk-ID-6" not in blob_ws and "SECRET" not in blob_ws and rec_ws.keys_present["anthropic_workspace_id"]
+    fb = Settings(_env_file=None, var_dir=tmp_path, anthropic_api_key="sk-SECRET-5", anthropic_auth_token="t")
+    assert fb.anthropic_auth_mode() == "oauth_fallback" and client_kwargs(fb)["api_key"] is None
     s = Settings(_env_file=None, var_dir=tmp_path, anthropic_auth_token="tok-SECRET-4")
     kw = client_kwargs(s)
     assert kw["api_key"] is None and kw["default_headers"] == {"anthropic-beta": s.anthropic_oauth_beta}

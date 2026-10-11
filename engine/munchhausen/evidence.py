@@ -23,6 +23,7 @@ from munchhausen.domain.registers import RunRecord
 from munchhausen.metrics import readings as R
 
 PARTIES_DIR = Path(__file__).resolve().parent / "impl" / "parties"
+PRESENCE_ONLY_KNOBS = frozenset({"anthropic_workspace_id"})
 
 
 class PreRegistrationError(RuntimeError):
@@ -63,15 +64,20 @@ def build_run_record(settings: Settings, *, selection: dict[str, dict[str, str]]
                      world_counts: dict[str, int], now: datetime) -> RunRecord:
     """The `runs` document (pure). Knobs exclude every secret; keys appear as presence only."""
     register = forecast_register(settings)
+    knobs = settings.knobs()
+    present = settings.keys_present()
+    for k in PRESENCE_ONLY_KNOBS:          # account identifiers: recorded as presence, like keys
+        if k in knobs:
+            present[k] = knobs.pop(k) is not None
     return RunRecord(
         _id=settings.run_id, world=f"{settings.world_adapter}+{settings.world_pack}", pack=settings.world_pack,
         seeds={"world": settings.world_seed, "stream": settings.stream_seed, "v": settings.v_seed},
-        knobs=settings.knobs(), ports=selection,
+        knobs=knobs, ports=selection,
         forecasts={fid: str(e.get("claim", "")) for fid, e in register.items()},
         capabilities=capabilities, started_at=now,
         git_sha=git[0], git_dirty=git[1], isolation=settings.isolation(), models=settings.model_ids(),
         prompt_hashes=prompts, pack_hash=pack_hash, world_counts=world_counts, forecast_register=register,
-        keys_present=settings.keys_present(), auth_mode=settings.anthropic_auth_mode(),
+        keys_present=present, auth_mode=settings.anthropic_auth_mode(),
     )
 
 

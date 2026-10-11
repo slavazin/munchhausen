@@ -24,6 +24,7 @@ ENGINE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ENGINE_ROOT.parent
 
 Role = Literal["learner", "evaluator", "executor"]
+AuthMode = Literal["api_key_workspace", "oauth_fallback", "oauth", "api_key", "none"]
 
 
 class Settings(BaseSettings):
@@ -49,7 +50,10 @@ class Settings(BaseSettings):
 
     # --- keys (SDKs also read their own env vars; held here so `doctor` can report presence) ---------
     # Aliases accept the names the user's `.env` carries; the canonical UPPER_CASE names still win.
-    anthropic_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key", "anthropic_munch_key"))
+    # An organization-level key not scoped to a workspace must send `anthropic-workspace-id` on every request.
+    anthropic_workspace_id: str | None = None
     anthropic_auth_token: SecretStr | None = Field(
         default=None, validation_alias=AliasChoices("ANTHROPIC_AUTH_TOKEN", "anthropic_auth_token", "claude_oauth_key"))
     voyage_api_key: SecretStr | None = Field(
@@ -234,11 +238,19 @@ class Settings(BaseSettings):
         secrets = [k for k, f in type(self).model_fields.items() if "SecretStr" in str(f.annotation)]
         return {k: getattr(self, k) is not None for k in secrets}
 
-    def anthropic_auth_mode(self) -> Literal["api_key", "oauth", "none"]:
-        """Which credential the Anthropic client uses: the API key if present, else the OAuth token."""
-        if self.anthropic_api_key is not None:
-            return "api_key"
-        return "oauth" if self.anthropic_auth_token is not None else "none"
+    def anthropic_auth_mode(self) -> AuthMode:
+        """Which credential the Anthropic client uses (recorded in `runs`, never a value):
+        `api_key_workspace` — API key with `ANTHROPIC_WORKSPACE_ID` (an org-level key needs the header);
+        `oauth_fallback` — an API key is present but no workspace id, so the OAuth token is used;
+        `oauth` — only the token; `api_key` — a key with neither workspace id nor token; `none`."""
+        key_, token = self.anthropic_api_key is not None, self.anthropic_auth_token is not None
+        if key_ and self.anthropic_workspace_id:
+            return "api_key_workspace"
+        if key_ and token:
+            return "oauth_fallback"
+        if token:
+            return "oauth"
+        return "api_key" if key_ else "none"
 
     def model_ids(self) -> dict[str, str]:
         return {k: v for k, v in self.knobs().items() if k.endswith("_model") and isinstance(v, str)}

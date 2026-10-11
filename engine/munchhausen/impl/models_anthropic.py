@@ -152,8 +152,15 @@ class AnthropicModels:
 
 
 def client_kwargs(settings: Settings) -> dict[str, Any]:
-    """API key if present; otherwise the OAuth token with its beta header (`ANTHROPIC_OAUTH_BETA`)."""
-    if settings.anthropic_auth_mode() == "oauth":
+    """Per `Settings.anthropic_auth_mode()`: an API key with its workspace header; else the OAuth token with its
+    beta header (`ANTHROPIC_OAUTH_BETA`), also when a key is present without a workspace id (recorded as
+    `oauth_fallback` in `runs`); else the bare key."""
+    mode = settings.anthropic_auth_mode()
+    if mode == "api_key_workspace":
+        return {"api_key": key(settings, "anthropic_api_key"),
+                "default_headers": {"anthropic-workspace-id": settings.anthropic_workspace_id},
+                "max_retries": settings.model_max_retries}
+    if mode in ("oauth", "oauth_fallback"):
         return {"api_key": None, "auth_token": key(settings, "anthropic_auth_token"),
                 "default_headers": {"anthropic-beta": settings.anthropic_oauth_beta},
                 "max_retries": settings.model_max_retries}

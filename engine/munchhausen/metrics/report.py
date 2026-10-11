@@ -74,7 +74,7 @@ def markdown(readings: Mapping[str, Any], run: Mapping[str, Any], *, against: Ma
     out.append(f"Anthropic auth mode: `{run.get('auth_mode', '—')}` (presence only).")
     out.append("")
     if run.get("models") or run.get("models_served"):
-        out.append("| model knob | configured | ")
+        out.append("| model knob | configured |")
         out.append("|---|---|")
         for k, v in sorted((run.get("models") or {}).items()):
             out.append(f"| {k} | {v} |")

@@ -31,7 +31,9 @@ class RunRecord(Value):
     forecast_register: dict[str, dict[str, Any]] = Field(default_factory=dict)   # id → full forecast entry
     keys_present: dict[str, bool] = Field(default_factory=dict)  # presence only, never a value
     ended_at: datetime | None = None
-    auth_mode: Literal["api_key", "oauth", "none"] = "none"      # which Anthropic credential (never its value)
+    # which Anthropic credential the client used (never a value): api_key_workspace | oauth_fallback | oauth |
+    # api_key | none (config.Settings.anthropic_auth_mode)
+    auth_mode: str = "none"
     # stage → {requested, served, ok, failed{error: n}}, stamped by `finish_run` from `spend` (with ended_at)
     models_served: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
