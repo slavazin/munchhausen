@@ -34,7 +34,7 @@ async def run_arms(h: Harness, arms: list[str], length: int | None) -> dict[str,
     # the vocabulary precedes the first episode: hooks, the nominator and the escape all read `terms`.
     # Idempotent (terms upsert by name; the same seed mines the same phrases), so a resume re-runs it safely.
     log.info("seed-vocab: %s", {k: v for k, v in (await seed_vocab(h)).items() if k != "sample"})
-    world = h.world()
+    world = await h.ready_world()
     runners = {a: h.arm_runner(a, world) for a in arms}
     results = await asyncio.gather(*(r.run(length) for r in runners.values()), return_exceptions=True)
     out: dict[str, Any] = {}
@@ -51,7 +51,7 @@ async def seed_vocab(h: Harness) -> dict[str, Any]:
     """Seed `terms` from the schema summary and the first VOCAB_WARMUP stream questions (never the pack)."""
     from munchhausen.agent.terms import seed_terms
 
-    s, world = h.settings, h.world()
+    s, world = h.settings, await h.ready_world()
     questions = list(islice(world.questions(s.stream_seed), s.vocab_warmup))
     rows = seed_terms(world.schema_summary(), questions, min_questions=s.vocab_min_questions,
                       max_tokens=s.vocab_max_phrase_tokens)
@@ -92,7 +92,7 @@ def register(app: typer.Typer) -> None:
         async def go() -> None:
             h = harness()
             try:
-                world = h.world()
+                world = await h.ready_world()
                 question = next(islice(world.questions(h.settings.stream_seed), idx, None))
                 ep = await h.forward_pass(arm, world).run(idx, question)
                 _echo(ep.model_dump(mode="json", by_alias=True))

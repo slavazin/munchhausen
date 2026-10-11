@@ -110,3 +110,10 @@ def test_execute_maps_a_refusal_to_an_irreducible_error() -> None:
     with pytest.raises(ExecutionError) as e:
         asyncio.run(execute(p, {}, reader, max_time_ms=100))
     assert isinstance(e.value.__cause__, PipelineRefused)
+
+
+def test_system_collections_are_never_lookup_targets() -> None:
+    db, reader = _reader()
+    db.colls["system.views"] = db.colls["customers"]
+    with pytest.raises(PipelineRefused, match="system.views"):
+        asyncio.run(reader.aggregate("customers", [{"$unionWith": "system.views"}], max_time_ms=100))

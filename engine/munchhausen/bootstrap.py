@@ -76,6 +76,15 @@ class Harness:
 
     # --- S2 (M2): the forward pass and the arm runner ---------------------------------------------------
 
+    async def ready_world(self) -> Any:
+        """The World with its schema summary loaded from the built `world` (a run that did not build it)."""
+        w = self.world()
+        try:
+            w.schema_summary()
+        except RuntimeError:
+            await w.load_schema()
+        return w
+
     def trace(self) -> Any:
         return self.shared("trace", self.settings.trace_impl)
 

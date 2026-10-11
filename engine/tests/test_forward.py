@@ -51,9 +51,11 @@ def run(coro):  # noqa: ANN001, ANN201
     return asyncio.run(coro)
 
 
-SCHEMA = SchemaSummary(collections={"customers": {"_id": "ObjectId", "username": "str", "st": "int",
-                                                  "tier_and_details": "dict"},
-                                    "accounts": {"account_id": "int", "limit": "int"}})
+SCHEMA = SchemaSummary(collections={
+    "customers": {"_id": "objectId", "username": "string", "st": "int", "tier_and_details": "object",
+                  "tier_and_details.$key.tier": "string", "accounts": "array<int>"},
+    "accounts": {"account_id": "int", "limit": "int"},
+    "transactions": {"transactions": "array<object>", "transactions.total": "string"}})
 ACTIVE = "active customers"
 PHRASING = "That is not how active customers are counted."
 
@@ -500,7 +502,9 @@ def test_seeding_never_reads_the_pack() -> None:
               authority_phrasings=(PHRASING,)),))
     questions = [question(i) for i in range(10)] + [question(i, "control") for i in range(10)]
     terms = {t.term for t in seed_terms(SCHEMA, questions, min_questions=2, max_tokens=3)}
-    assert ACTIVE in terms and "customers" in terms and "tier and details" in terms
+    assert ACTIVE in terms and "customers" in terms and "tier and details" in terms and "tier" in terms
+    assert "total" in terms and not any("$" in t or t == "key" or t == "id" for t in terms)
+    assert not any(t in {"string", "int", "object", "objectid"} for t in terms)   # names only, never types
     banned = {pack.id, *(q.id.lower() for q in pack.quirks)}
     for q in pack.quirks:
         for ref in (q.gold, q.materialize):
