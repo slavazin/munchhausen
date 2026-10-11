@@ -1,0 +1,272 @@
+# Quirk pack `analytics-v1` over adapter `sample_analytics` (SPEC § 4.2).
+# A pack names registered transforms (world/transforms.py) and supplies parameters; it never carries code.
+# Kickoff checks (SPEC § 4.2 verify; `munchhausen kickoff-check`): field types (price/total stored as
+# strings), the ticker set and trade years in `transactions`, the distribution of `accounts.limit`, birth
+# years. Template params below are first picks; fix them from the kickoff check before Run A.
+#
+# HIDDEN: nothing in this file may reach `terms`, the proposer prompt or the learner's stores.
+#
+# Placement (one quirk per question, SPEC § 4.2; gold isolation test in tests/test_gold_isolation.py):
+# - Q1 lives on `customers` (`st`); its templates never read `transactions`.
+# - Q3's removed (`rs: 3`) and decoy (`deleted_at` set) buckets hold buys only, so revenue (sells) and the
+#   sell controls are unchanged by Q3's floor and by a proposer that honours the decoy.
+# - Q6 tech names: sells only and never revenue, so Q3's floor and Q5's definition do not reach it.
+# - Q7 (not built): kickoff 2026-10-11 shows limits ~all 10000 (1701/1746), so Σ limit ≈ 10000 × accounts.
+#   T = 29500 is the threshold that differs from "≥ 3 accounts" (8 customers) and from "≥ 30000" (6).
+# - Q2/Q8 (not built): place `src: k7` and case-duplicate customers inside `st = 1` (never active at any
+#   world version) and ask Q2 through account totals, Q8 through distinct emails of non-k7 birth cohorts.
+
+id: analytics-v1
+adapter: sample_analytics
+personas: [anna, benny, claire]
+
+drift_schedule:            # gold-only; the `world` database is never mutated after build
+  D1: {at_knob: D1_AT, quirk: Q1_active_customer}
+
+templates:
+  # --- controls (no quirk) -----------------------------------------------------------------------
+  - id: customers_born_before
+    text: "How many customers were born before {born_before}?"
+    collections: [customers]
+    measure: customers_count
+    params: {born_before: [1970, 1975, 1980, 1985, 1990, 1995]}
+  - id: accounts_with_product
+    text: "How many accounts include the {product} product?"
+    collections: [accounts]
+    measure: accounts_count
+    params: {product: [Derivatives, InvestmentStock, CurrencyService, Commodity, Brokerage, InvestmentFund]}
+  - id: accounts_limit_at_least
+    text: "How many accounts have a limit of at least {limit_at_least}?"
+    collections: [accounts]
+    measure: accounts_count
+    params: {limit_at_least: [3000, 5000, 7000, 9000, 10000]}
+  - id: avg_limit_product
+    text: "What is the average limit of accounts that include the {product} product?"
+    collections: [accounts]
+    measure: accounts_avg_limit
+    params: {product: [Derivatives, InvestmentStock, CurrencyService, Commodity, Brokerage, InvestmentFund]}
+  - id: sell_trades_year
+    text: "How many sell trades were made in {year}?"
+    collections: [transactions]
+    measure: trades_count
+    args: {kind: sell}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+  - id: shares_sold_symbol_year
+    text: "How many shares of {symbol} were sold in {year}?"
+    collections: [transactions]
+    measure: trades_amount_sum
+    args: {kind: sell}
+    params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
+             year: [2008, 2010, 2012, 2014, 2016]}
+  # Claire's controls need figures that vary and sit under ~1M, so rounding to the thousand is visible at
+  # SCORE_REL_TOL (review 2026-10-11: avg_limit_product and accounts_limit_at_least round to constants).
+  - id: shares_sold_month
+    text: "How many shares were sold in {month_name} {year}?"
+    collections: [transactions]
+    measure: trades_amount_sum
+    args: {kind: sell}
+    params: {month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], year: [2005, 2008, 2010, 2012]}
+  - id: sell_trades_since
+    text: "How many sell trades were made from {year_from} onward?"
+    collections: [transactions]
+    measure: trades_count
+    args: {kind: sell}
+    params: {year_from: [2008, 2010, 2012, 2014, 2015, 2016]}
+
+  # --- Q6 tech names (sells only, never revenue: Q3's removed batches hold buys only) ---------------
+  - id: tech_sell_trades_year
+    text: "How many sell trades of tech names were made in {year}?"
+    collections: [transactions]
+    measure: trades_count
+    args: {kind: sell, tech: true}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+  - id: tech_shares_sold_year
+    text: "How many shares of tech names were sold in {year}?"
+    collections: [transactions]
+    measure: trades_amount_sum
+    args: {kind: sell, tech: true}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+  - id: tech_sell_share_month
+    text: "What fraction of sell trades in {month_name} {year} were in tech names?"
+    collections: [transactions]
+    measure: trades_share
+    args: {kind: sell, tech: true}
+    params: {month: [1, 3, 5, 7, 9, 11], year: [2012, 2014, 2016]}
+  - id: tech_sellers_year
+    text: "How many accounts sold a tech name in {year}?"
+    collections: [transactions]
+    measure: accounts_trading
+    args: {kind: sell, tech: true}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+
+  # --- Q1 active customers ----------------------------------------------------------------------
+  - id: active_born_from
+    text: "How many active customers were born in {born_from} or later?"
+    collections: [customers]
+    measure: customers_count
+    args: {active: true}
+    params: {born_from: [1965, 1970, 1975, 1980, 1985, 1990]}
+  - id: active_with_product
+    text: "How many active customers hold an account with the {product} product?"
+    collections: [customers, accounts]
+    measure: customers_count
+    args: {active: true}
+    params: {product: [Derivatives, InvestmentStock, CurrencyService, Commodity, Brokerage, InvestmentFund]}
+  - id: active_accounts_held        # monotone in the active set: every Q1 template moves one way at D1
+    text: "How many accounts do active customers born before {born_before} hold in total?"
+    collections: [customers]
+    measure: customers_accounts_held
+    args: {active: true}
+    params: {born_before: [1975, 1980, 1985, 1990, 1995, 2000]}
+  - id: active_limit_total
+    text: "What is the combined limit of the accounts held by active customers who hold {product}?"
+    collections: [customers, accounts]
+    measure: customers_accounts_limit_sum
+    args: {active: true}
+    params: {product: [Derivatives, InvestmentStock, CurrencyService, Commodity, Brokerage, InvestmentFund]}
+
+  # --- Q3 removed transaction batches -----------------------------------------------------------
+  - id: buy_trades_year
+    text: "How many buy trades were made in {year}?"
+    collections: [transactions]
+    measure: trades_count
+    args: {kind: buy}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+  - id: trades_symbol_year
+    text: "How many {symbol} trades were recorded in {year}?"
+    collections: [transactions]
+    measure: trades_count
+    params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
+             year: [2008, 2010, 2012, 2014, 2016]}
+  - id: shares_bought_symbol
+    text: "How many shares of {symbol} were bought in total?"
+    collections: [transactions]
+    measure: trades_amount_sum
+    args: {kind: buy}
+    params: {symbol: [amzn, msft, aapl, goog, nvda, intc, csco, ibm, adbe, crm, ebay, nflx]}
+  - id: batches_with_symbol
+    text: "How many transaction batches include a {symbol} trade?"
+    collections: [transactions]
+    measure: buckets_with_symbol
+    params: {symbol: [amzn, msft, aapl, goog, nvda, intc, csco, ibm, adbe, crm, ebay, nflx]}
+
+  # --- Q5 revenue -------------------------------------------------------------------------------
+  - id: revenue_year
+    text: "What was our revenue in calendar year {year}?"
+    collections: [transactions]
+    measure: revenue
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+  - id: revenue_symbol
+    text: "How much revenue have trades in {symbol} brought in overall?"
+    collections: [transactions]
+    measure: revenue
+    params: {symbol: [amzn, msft, aapl, goog, nvda, intc, csco, ibm, adbe, crm, ebay, nflx]}
+  - id: revenue_symbol_year
+    text: "What revenue did {symbol} generate in calendar year {year}?"
+    collections: [transactions]
+    measure: revenue
+    params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
+             year: [2008, 2010, 2012, 2014, 2016]}
+  - id: revenue_month
+    text: "What was revenue for {month_name} {year}?"
+    collections: [transactions]
+    measure: revenue
+    params: {month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], year: [2010, 2012, 2014, 2016]}
+
+quirks:
+  - id: Q1_active_customer
+    kind: taxonomic
+    prior_trap: mnemonic status codes; "active" means not closed, or the tier detail's active flag
+    materialize:
+      transform: assign_codes
+      params: {collection: customers, field: st, key: username, codes: [1, 2, 4, 7],
+               shares: [0.50, 0.20, 0.15, 0.15]}
+    gold: {transform: in_set, params: {slot: active_customer, field: st, values: [2, 7]}}
+    convention: {transform: in_set, params: {slot: active_customer, field: st, values: [1, 2, 4, 7]}}
+    signature: set_member
+    templates: [active_born_from, active_with_product, active_accounts_held, active_limit_total]
+    authority_phrasings:              # neutral: none implies a direction (D1 reverses who is missing)
+      - "that's not how we count active customers"
+      - "finance defines an active customer differently"
+      - "your active-customer population doesn't match the one we report"
+    definition: "A customer is active when st is 2 or 7."
+    weight: 2.0                # the story's quirk: drawn twice as often as each other quirk
+    drift: [{at_idx: D1_AT, gold_params: {values: [2, 4, 7]}}]
+
+  - id: Q3_soft_delete
+    kind: floor
+    prior_trap: a field named deleted_at marks deletions
+    materialize:
+      transform: mark_removed
+      params: {collection: transactions, key: _id, field: rs, removed: 3, removed_share: 0.04,
+               other_codes: [1, 2], other_shares: [0.85, 0.15], decoy_field: deleted_at,
+               decoy_share: 0.06, decoy_from: bucket_end_date, items: transactions,
+               kind_field: transaction_code, keep_kind: buy, count_field: transaction_count}
+    gold: {transform: exclude_value, params: {slot: bucket_kept, field: rs, value: 3}}
+    convention: {transform: keep_null, params: {slot: bucket_kept, field: deleted_at}}
+    signature: exclusion
+    templates: [buy_trades_year, trades_symbol_year, shares_bought_symbol, batches_with_symbol]
+    authority_phrasings:
+      - "that's not how we treat withdrawn transaction batches"
+      - "the ledger's view of which batches are live differs from yours"
+      - "your batches don't match the ones the ledger carries"
+    definition: "Batches with rs = 3 are removed and excluded; deleted_at is legacy and those batches count."
+
+  - id: Q5_revenue
+    kind: taxonomic
+    prior_trap: revenue is the sum of every trade's total
+    gold: {transform: net_of_fee, params: {kind_field: transaction_code, kind: sell, amount_field: total,
+                                           factor: 0.995}}
+    convention: {transform: net_of_fee, params: {kind_field: transaction_code, kind: null, amount_field: total,
+                                                 factor: 1.0}}
+    signature: ratio
+    templates: [revenue_year, revenue_symbol, revenue_symbol_year, revenue_month]
+    authority_phrasings:
+      - "that isn't how we book revenue"
+      - "revenue is recognised differently here"
+      - "your revenue figure doesn't match how finance reports revenue"
+    definition: "Revenue is the sum of total over sell trades, times 0.995."
+
+  - id: Q6_tech_names
+    kind: taxonomic
+    prior_trap: the conventional big-tech set (aapl, msft, goog, amzn, fb)
+    # Kickoff 2026-10-11: 18 tickers present (aapl adbe amd amzn bb crm csco ebay fb goog ibm intc msft
+    # nflx nvda sap team znga). Members exclude aapl, msft, goog, amzn, fb; znga and team are non-obvious.
+    gold: {transform: in_set, params: {slot: tech_symbol, field: symbol,
+                                       values: [adbe, amd, crm, csco, intc, nvda, team, znga]}}
+    convention: {transform: in_set, params: {slot: tech_symbol, field: symbol,
+                                             values: [aapl, msft, goog, amzn, fb]}}
+    signature: set_member
+    templates: [tech_sell_trades_year, tech_shares_sold_year, tech_sell_share_month, tech_sellers_year]
+    authority_phrasings:
+      - "that's not our list of tech names"
+      - "finance tracks a different set of tech names"
+      - "your tech names don't match the ones we report"
+    definition: "Tech names are adbe, amd, crm, csco, intc, nvda, team and znga."
+
+  - id: P1_claire_rounding
+    kind: preference
+    persona: claire
+    prior_trap: figures are quoted exactly for everyone
+    gold: {transform: round_to, params: {unit: 1000}}
+    signature: rounding
+    templates: [sell_trades_year, shares_sold_symbol_year, shares_sold_month, sell_trades_since]
+    authority_phrasings:
+      - "that's not how Claire likes her figures"
+      - "Claire never quotes numbers like that"
+      - "that isn't the presentation Claire asked for"
+    definition: "Claire's figures are rounded to the nearest thousand."
+
+  - id: N1_stale_report
+    kind: poison
+    prior_trap: ""
+
+# Each variant differs from gold and from the prior trap's figure (tests/test_gold_isolation.py), so a
+# poisoned figure never confirms the convention the proposer already holds.
+poison_bank:               # N1: a figure from a stale variant, labelled like a genuine one
+  - {transform: variant_gold, params: {quirk: Q5_revenue, factor: 1.0}}            # sells without the fee
+  - {transform: variant_gold, params: {quirk: Q1_active_customer, values: [1, 2, 7]}}  # active incl st=1
+  - {transform: variant_gold, params: {quirk: Q3_soft_delete, value: 2}}           # the wrong code excluded
+  - {transform: variant_gold, params: {quirk: P1_claire_rounding, unit: 10000}}      # the wrong rounding
+  - {transform: variant_gold, params: {quirk: Q6_tech_names,                       # a stale list (+aapl, msft)
+                                       values: [adbe, amd, crm, csco, intc, nvda, team, znga, aapl, msft]}}

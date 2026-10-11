@@ -1,0 +1,124 @@
+"""The port registry: implementation name → import path, per port (SPEC § 21).
+
+This is the one place allowed to know implementation names. Nothing else branches on a dataset name, an
+embedder name or a vendor key. Entries are import paths resolved lazily, so an optional SDK that is not
+installed fails only when its implementation is selected.
+"""
+
+from __future__ import annotations
+
+import importlib
+from typing import Any
+
+REGISTRY: dict[str, dict[str, str]] = {
+    "world": {
+        "pack": "munchhausen.world.pack_world:PackWorld",   # adapter + quirk pack; composes Truth=pack_gold
+    },
+    "adapter": {
+        "sample_analytics": "munchhausen.world.adapters.sample_analytics:SampleAnalyticsAdapter",
+    },
+    "representation": {
+        "voyage-4": "munchhausen.impl.representation:VoyageRepresentation",
+        "voyage-4-lite": "munchhausen.impl.representation:VoyageRepresentation",
+        "none": "munchhausen.impl.representation:NoRepresentation",
+    },
+    "reranker": {
+        "rerank-3": "munchhausen.impl.reranker:VoyageReranker",
+        "rerank-3-lite": "munchhausen.impl.reranker:VoyageReranker",
+        "identity": "munchhausen.impl.reranker:IdentityReranker",
+    },
+    "similarity": {
+        "atlas-vector": "munchhausen.impl.similarity:AtlasVectorSimilarity",
+        "atlas-exact": "munchhausen.impl.similarity:AtlasVectorSimilarity",
+        "numpy": "munchhausen.impl.similarity:NumpySimilarity",
+    },
+    "grouper": {
+        "agglomerative": "munchhausen.impl.grouper:AgglomerativeGrouper",
+        "signature-buckets": "munchhausen.impl.grouper:SignatureBucketGrouper",   # E2; works with no embedder
+    },
+    "read_model": {
+        "atlas": "munchhausen.store.read_models:AtlasReadModel",   # the viewer's read-only aggregations (S6)
+    },
+    "lens_panel": {
+        "jev": "munchhausen.impl.lens_panel:JevLensPanel",
+        "none": "munchhausen.impl.lens_panel:NoLensPanel",
+    },
+    "curator": {
+        "governed": "munchhausen.learn.curators:governed",
+        "ungated": "munchhausen.learn.curators:ungated",
+        "naive": "munchhausen.learn.curators:naive",
+        "self_ref": "munchhausen.learn.curators:self_ref",
+        "hitl": "munchhausen.learn.curators:hitl",
+    },
+    "memory_sink": {
+        "null": "munchhausen.impl.sinks:NullMemorySink",
+    },
+    "trace": {
+        "null": "munchhausen.impl.sinks:NullTrace",
+        "jsonl": "munchhausen.impl.sinks:JsonlTrace",
+        "raindrop": "munchhausen.impl.sinks:RaindropTrace",   # SPEC § 25.1; extra `trace` (raindrop-ai)
+    },
+    "signal_source": {
+        "none": "munchhausen.impl.sinks:NoSignalSource",
+    },
+    "models": {
+        "anthropic": "munchhausen.impl.models_anthropic:AnthropicModels",
+    },
+    "store": {
+        "atlas": "munchhausen.store.atlas:AtlasStore",
+    },
+}
+
+# Offline or null implementation per port: every port has one (SPEC § 21 port invariants).
+NULL_IMPLEMENTATION: dict[str, str] = {
+    "representation": "none",
+    "reranker": "identity",
+    "similarity": "numpy",
+    "lens_panel": "none",
+    "memory_sink": "null",
+    "trace": "null",
+    "signal_source": "none",
+}
+
+# S2 (M2): the settings key an implementation needs. Without it, the composition root selects the port's
+# NULL_IMPLEMENTATION and records the effective selection in `runs.ports` (no Voyage key → `none`/`identity`).
+REQUIRES_KEY: dict[str, dict[str, str]] = {
+    "representation": {"voyage-4": "voyage_api_key", "voyage-4-lite": "voyage_api_key"},
+    "reranker": {"rerank-3": "voyage_api_key", "rerank-3-lite": "voyage_api_key"},
+    "trace": {"raindrop": "raindrop_write_key"},
+}
+
+# Ports whose selection may name several implementations (joined by IMPL_LIST_SEP): the composition root
+# builds each and hands the list to this port's fan-out, which forwards every call to each. Write-only ports.
+FAN_OUT: dict[str, str] = {
+    "trace": "munchhausen.impl.sinks:TeeTrace",
+}
+
+
+class UnknownImplementation(KeyError):
+    pass
+
+
+def resolve(port: str, name: str) -> Any:
+    """Return the class or factory registered for (port, name)."""
+    try:
+        path = REGISTRY[port][name]
+    except KeyError as e:
+        known = sorted(REGISTRY.get(port, {}))
+        raise UnknownImplementation(f"no {port!r} implementation named {name!r}; known: {known}") from e
+    module, _, attr = path.partition(":")
+    return getattr(importlib.import_module(module), attr)
+
+
+def fan_out(port: str) -> Any:
+    """The fan-out class for `port`, called with the list of built implementations."""
+    try:
+        path = FAN_OUT[port]
+    except KeyError as e:
+        raise UnknownImplementation(f"port {port!r} takes one implementation; fan-out ports: {sorted(FAN_OUT)}") from e
+    module, _, attr = path.partition(":")
+    return getattr(importlib.import_module(module), attr)
+
+
+def names(port: str) -> list[str]:
+    return sorted(REGISTRY[port])

@@ -1,4 +1,4 @@
-# Munchhausen — a harness that admits only what the world confirms
+# Munchhausen — a harness that admits only what the authority's figures reproduce out of sample
 
 Design document for the Harness Engineering & Model Wrangling hackathon (Shack15, San Francisco, 2026-10-11; hacking 10:30–17:00 PT). Solo build.
 This file is written before the event. The event's rule *New Work Only* governs the code: every line under `engine/` and `viewer/` is written on the day, apart from the schema import named in § 15.
@@ -16,15 +16,15 @@ Self-critique, "act as the subject-matter expert" prompting and self-graded memo
 2. **Uninferable constants.** Thresholds, sets, fees and offsets can't be derived by reasoning; they have to be measured.
 3. **World shift.** After the world changes, a self-graded agent checks each answer with the same stale rule that produced it. It stays internally consistent and confidently wrong: self-reference certifies the stale rule.
 
-The name casts the model as the Baron: a charming storyteller who swears he pulled himself out of the swamp by his own hair. The harness is the party that checks the story against the swamp.
+The name casts the model as the Baron: a charming storyteller who swears he pulled himself out of the swamp by his own hair. The harness is the party that checks the story against an outside authority's figures. It never reaches the swamp itself: an authority that is wrong the same way on every question passes every check here (§ 7.4, residue). The claim is therefore narrower than "the world confirms": a decision is admitted only when the authority's figures, out of sample, reproduce its effect.
 
 **Munchhausen** is an agent harness that rewrites its own rules, guardrails and tool access from an external numeric signal: the figure an authority expected.
-- **Admission:** every candidate decision passes a lens panel (corroborating) and an out-of-sample **backtest** against the case store (dispositive) before it is admitted.
+- **Admission:** every candidate decision is scored by a lens panel (corroborating; recorded, not a gate) and passes an out-of-sample, **paired backtest** against the authority's confirmed figures in the case store (dispositive) before it is admitted.
 - **Consultation:** every admitted decision reaches the working agent only through its own **hook**.
 - **Revisit:** every admitted decision carries a **revisit trigger** that reads residuals against the authority's figures. When the world shifts, the trigger fires and the decision is superseded, leaving a tombstone.
 
 The demo world is a data agent answering business questions over a MongoDB dataset whose meaning lives in hidden tribal knowledge.
-Four arms run side by side: **frozen**, **self-referential**, **naive** and **governed**.
+Five arms run side by side: **frozen**, **self-referential**, **naive**, **ungated** and **governed**. `ungated` is `governed` without its gate, so the pair isolates what governance adds.
 
 Positioning against the host platform: Atlas Agent Engine (public preview, launched 2026-09-29) provides memory *types*. Munchhausen gives each stored decision a warrant, a hook and a tripwire. It is a governance layer on top of Atlas memory, not a replacement for it.
 
@@ -35,7 +35,7 @@ Criteria and weights are from the event page (read 2026-10-10). Round two weight
 | Criterion (round-one weight) | What carries it |
 |---|---|
 | Technical demo 35% | Replay scrubber over a recorded run. One live beat: a judge feeds the agent a false authority figure and watches backtest reject the resulting draft. A floor latch turns into a MongoDB view, and a pipeline loses the soft-deleted rows. Drift fires a trigger, which leads to a tombstone, traced with `why`. |
-| Implementation difficulty 30% | Hook-keyed consultation, residual attribution, backtest replay against the case store, floor latches materialized as views, supersession lineage via `$graphLookup`, lens weights fitted to backtest outcomes |
+| Implementation difficulty 30% | Hook-keyed consultation, residual attribution, paired backtest replay against the case store, floor latches materialized as views, supersession lineage via `$graphLookup`, lens weights fitted to backtest outcomes |
 | Impact 20% | Enterprise data agents fail on tribal knowledge. Auto-extracted memory spreads wrong, stale or one-person lessons into shared context. |
 | Creativity 15% | Memory admission as an experiment: each decision is a hypothesis with a falsifier, admitted by an out-of-sample replay and retired by the world |
 
@@ -43,7 +43,7 @@ Problem statements covered:
 - **1 Recursive Harnessing:** the harness rewrites its rules, guardrails and tool access (§ 8).
 - **2 Long Horizon:** a resumable prequential stream learning from a hard numeric metric.
 
-Raindrop RSI prize ($3,000): the second-order loop (§ 9), with Raindrop as an optional outside observer (§ 25). The stand-in adjudicator learns which questions to ask, graded by backtest outcomes, never by its own verdicts.
+Raindrop RSI prize ($3,000): the second-order loop (§ 9), with Raindrop as an optional outside observer (§ 25). The stand-in adjudicator reweights its five authored lenses from backtest outcomes, never from its own verdicts. At about 20 labels the claim is the panel's prequential AUC with its interval; per-lens weights at that n are coin flips (§ 24.2 L2), so it is not pitched as "learning which questions to ask".
 
 **Do:** keep the agent acting at the centre of every demo beat; the event bans projects whose main feature is a dashboard.
 **Don't:** strip the curves; they carry the self-reference claim. They sit in a side pane.
@@ -152,36 +152,50 @@ Source: the Atlas sample database `sample_analytics` (`customers`, `accounts`, `
 
 Both drifts are gold-only: before D1, gold excludes `st=4`; after D1, it includes it. The `world` database is identical across arms and never mutated after build. So arms running at different speeds see each drift at the same stream index.
 
+**One quirk per question.** Every quirk-bearing template touches exactly one quirk, and the preference persona (Dana, P1) is drawn on control templates only (`world/questions.py: hidden_quirks` refuses any other pairing). With binary scoring, a question touching two quirks rewards a correct decision for one of them with nothing until the other is admitted too: the backtest can't credit it, the nominator can't reproduce its figures, and the authority's phrasing can name the quirk the answer got right, which raises false attributable residuals.
+- Quirks whose populations overlap (Q1, Q2 and Q8 all act on customers) are materialized so that each one's population sits where the other quirks' definitions already exclude it, or each is asked through templates scoped away from the others (e.g. Q2 through account totals). The pack fixes the placement.
+- A gold isolation test asserts, for every quirk template, that applying every other quirk's gold transform leaves its gold unchanged.
+- Post-event: multi-quirk templates return, with the backtest reading residual reduction instead of a binary match and the authority naming a quirk the answer actually missed.
+
+**Build order.** Controls and Q1 first, then the pilot gate (§ 12), then the remaining quirks. If the day runs short, the minimum set that still carries the complete story (§ 13) is Q1 (with D1), Q3 (floor plus decoy), Q5, P1 and N1.
+
 ### 4.3 Questions
 
 - `world/questions.py`: about 12 templates × parameters (year, quarter, ticker set, tier, persona). They form an unbounded stream drawn from a seed. Each question carries hidden tags: the quirk ids it touches, persona, template id.
-- **Mix:** 65% touch ≥ 1 quirk; 35% are controls touching none.
+- **Mix:** 65% touch exactly one quirk; 35% are controls touching none (§ 4.2, one quirk per question).
 - `truth.gold(question, world_version)` runs a gold pipeline built from the pack's gold transforms. `world_version` is derived from the arm's stream index and the pack's drift schedule.
-- **Sealed V set:** `V_SIZE` questions from a fixed seed, never in the stream. Every arm scores it every `V_EVERY` episodes, against the current world version.
+- **Sealed V set:** `V_SIZE` questions from a fixed seed, never in the stream. Every arm scores it at `V_OFFSET + k·V_EVERY` (75, 225, 375, …), against the current world version, so no read lands on a drift index. At `V_SIZE` 40 a single V read carries a 95% interval of about ±15pp; V is read as a paired difference between arms, never as a lone accuracy.
 
 **Do:** cover each gold transform with a test asserting it on a hand-computed fixture before any arm runs.
 **Don't:** add templates past what the gold tests cover. A gold bug is indistinguishable from poison in every readout.
 
 ### 4.4 Scoring and authority
 
-- **Scoring** (`agent/score.py`): numeric answers use relative tolerance 1e-4 (absolute 0.5 after Dana rounding); lists use set equality after lower-casing. Only the first attempt counts toward accuracy.
-- **Authority** (`agent/authority.py`), on a wrong first attempt, in arms that receive it:
+- **Scoring** (`domain/scoring.py`, pure): numeric answers use relative tolerance 1e-4 (absolute 0.5 after Dana rounding); lists use set equality after lower-casing. Only the first attempt counts toward accuracy.
+- **Authority** (`world/authority.py`; it reads gold, so it sits on the evaluation side), on a wrong first attempt, in arms that receive it:
   - `terse`: the figure only. "Finance has 1,204."
   - `term` (default): the figure plus one phrasing that names a missed concept, never its definition. "Finance has 1,204 — that's not how we count active customers."
   - `rule`: the figure plus the definition. It is a control setting, never the reported configuration.
 
-For a miss touching several quirks, the authority names one at random. Dana's phrasings mention rounding. N1 replaces the figure with a poisoned figure under the same phrasing.
+Every question touches at most one quirk (§ 4.2), so the phrasing names the quirk the answer missed. Dana's phrasings mention rounding. N1 replaces the figure with a poisoned figure under the same phrasing.
 
 ## 5. Arms
 
 | Arm | Authority | Write path | Consultation | Claim it isolates |
 |---|---|---|---|---|
-| `frozen` | none | none | none | baseline; runs the V set only (`FROZEN_STREAM=false`) |
-| `self_ref` | none | after each episode the proposer self-grades as "the subject-matter expert"; on a self-judged miss it writes a lesson, admitted directly | semantic top-k | self-reference: prior capture and drift blindness |
-| `naive` | yes | each observation's lesson is admitted directly; merged into an existing decision when cosine ≥ `NAIVE_MERGE_COSINE` | semantic top-k | an external signal without governance |
-| `governed` | yes | episodic pass → stand-in adjudicator → backtest → admission (§ 7) | hooks (§ 6.2) | governance |
+| `frozen` | none | none | none | baseline. Runs the stream (`FROZEN_STREAM=true`): the paired no-learning reference every other arm reads against |
+| `self_ref` | none | after each episode the proposer self-grades as "the subject-matter expert"; on a self-judged miss it writes a lesson, admitted directly | semantic top-k | self-reference. It receives no outside information, so it cannot learn a counter-prior fact by construction; it is a reference, not a finding |
+| `naive` | yes | one lesson per reducible observation, admitted directly; merged into an existing decision when cosine ≥ `NAIVE_MERGE_COSINE` | semantic top-k | the off-the-shelf memory shape with an external signal |
+| `ungated` | yes | `governed`'s episodic pass and nominator, admitted at L0 (curator `ungated`: L0 → admit) | hooks (§ 6.2) | the gate: `governed − ungated` reads what L2–L4 add, with retrieval, payload author and aggregation held equal |
+| `governed` | yes | episodic pass → stand-in adjudicator → paired backtest → admission (§ 7) | hooks (§ 6.2) | governance |
 
-Premise: `self_ref` and `naive` use semantic top-k retrieval, the shape of off-the-shelf agent memory. That confounds the retrieval method with governance, and the report names the confound beside every figure comparing `naive` to `governed`.
+**Lessons** (the write unit of `naive` and `self_ref`; `domain/lesson.py`). A lesson is `{title, kind ∈ taxonomic|procedural|preference, payload}`.
+- `naive`: the lesson writer (`Models.lesson`, model `NAIVE_LESSON_MODEL`, default the nominator's model) reads one reducible observation, its episode, the authority's figure and phrasing, and the retry pipeline with `retry_correct`. It writes one lesson. This is the off-the-shelf reflection step; the observation itself still never states a fix (§ 23.1).
+- `self_ref`: the self-grade (`Models.self_grade`) returns the lesson on a self-judged miss.
+- `lesson_entry` fills the entry contract mechanically: one chosen option and no rejected row, a hook copied from the source episode's terms and collection (it scopes residual attribution only; these arms consult by retrieval), no revisit latch, and a residue saying so. The curator's L0 is `LessonShape` (title, payload, no source figure, language lint), because the entry-contract L0 would refuse every lesson and measure the contract instead of the arm.
+- The report names the lesson writer and its inputs beside every `naive` figure.
+
+**What each comparison isolates.** `naive` and `governed` differ in four things: retrieval (top-k vs hooks), aggregation (one observation vs a shape), the payload's author and inputs (lesson writer vs nominator with the world tool), and the gate. `naive − governed` is therefore reported as the off-the-shelf comparison with those confounds named beside it, never as the effect of governance. The effect of governance is read from `governed − ungated`, which differ only in the curator.
 Stretch: back `naive` with Atlas Agent Memory itself (**verify** at kickoff that the sandbox exposes it).
 
 Every arm's proposer emits `confidence ∈ [0,1]` with its answer. Self-assessed accuracy, its mean over a window, is reported beside true accuracy for every arm.
@@ -217,7 +231,9 @@ On a miss with an authority figure, the harness writes one residual per `applied
 - **Attributable:** the authority's phrasing names a concept in the decision's `fires-when`, and no other applied decision's hook names that concept.
 - **Signature match:** the residual matches the decision's declared signature. Examples: a constant ratio (`ratio`); a delta equal to one population's contribution (`exclusion`); a residual only on period windows crossing a boundary (`date_offset`).
 
-Each decision's revisit trigger is the guard: ≥ `FIRE_MIN_RESIDUALS` attributable residuals within the last `FIRE_WINDOW` consultations of that decision. When it holds, it emits a **dispositive** fire. A corroborating fire (proposer anomaly, unattributable residual) is recorded and never settles anything on its own.
+Each decision's revisit trigger is the guard: ≥ `FIRE_MIN_RESIDUALS` residuals within the last `FIRE_WINDOW` consultations of that decision that are attributable, signature-matched and agree in direction (the sign of answer − figure). When it holds, it emits a **dispositive** fire. A corroborating fire (proposer anomaly, unattributable residual) is recorded and never settles anything on its own.
+- The per-episode signature checks are weak: every one but `rounding` reduces to "the answer differs". Direction is the discriminating read. A shifted world moves one decision's answers the same way on every consultation (after D1 an applied Q1 decision undercounts each time), while poisoned figures and residuals borrowed from another quirk scatter.
+- The other defence against false fires is one quirk per question (§ 4.2), which makes the authority's phrasing name the concept the answer actually missed.
 
 **Do:** compute residuals in the harness, mechanically, from stored figures.
 **Don't:** ask the proposer whether its decisions held. Self-report is the channel this design exists to replace.
@@ -228,14 +244,17 @@ Each decision's revisit trigger is the guard: ≥ `FIRE_MIN_RESIDUALS` attributa
 
 For each miss, the observer (Haiku) writes an observation under the contract of § 23.1: `{noticed (1–3 sentences, no fix), surfaces{terms, collection, phrasing}, answer, figure, ratio, pipeline, retry_pipeline, retry_correct}`. It embeds `noticed` with `voyage-4`.
 
-**Noise filter:** before an observation reaches the episodic pass, the observer classifies the miss as `reducible` (a concept or definition) or `irreducible` (an execution error, an empty result, a wrong `answer_path`, malformed syntax). Irreducible observations are stored with `status: noise` and never join a shape.
+**Noise filter:** before an observation reaches the episodic pass, the observer classifies the miss as `reducible` (a concept or definition) or `irreducible` (an execution error, an empty result, a wrong `answer_path`, malformed syntax). Irreducible observations are stored with `disposition: noise` and never join a shape.
 
 ### 7.2 Episodic pass (`learn/episodic.py`), every `ROUND_SIZE` episodes per arm
 
-1. **Group:** `AgglomerativeClustering(metric="cosine", linkage="average", distance_threshold=CLUSTER_DISTANCE)` over the arm's open observations (including those carried from the last 3 rounds). Embeddings locate the shapes.
+1. **Group:** `AgglomerativeClustering(metric="cosine", linkage="average", distance_threshold=CLUSTER_DISTANCE)` over every open observation of the arm. An observation stays open until a shape spends it (`CARRY_ROUNDS` unset); evidence for a rare template or one persona arrives slowly, and a short expiry window would refuse it by construction. Embeddings locate the shapes.
 2. **Coherence guard:** a cluster whose members share no normalized term or authority phrasing is split by term before it counts as a shape. The guard checks the grouping and proposes nothing.
 3. **Bar:** ≥ `BAR_MIN_OBS` observations from ≥ `BAR_MIN_TEMPLATES` distinct templates. Persona-scoped shapes need ≥ 2 observations from the same persona.
+   **Direction read** (E4, part of the bar): a shape is formed from misses, so its members agree by construction. Read the stream episodes its presentation matches (its shared terms, else its templates), hits included: the miss rate inside must exceed the miss rate outside by ≥ `BAR_MIN_GAP`, over ≥ `BAR_MIN_MATCHED` matched episodes. One aggregation (`EpisodeRepository.direction_read`); arms with an authority only.
 4. **Nominate:** the nominator (Sonnet) takes one shape at a time and generalizes it into the decision that answers the question whose answer would settle the shape's observations. It writes that decision as a draft into `drafts`, one per shape. It holds a read-only world query tool and searches for a definition that reproduces the source observations' figures before writing the payload. The draft fills the entry contract (§ 10.2).
+   - **Not blind:** before drafting, it is shown the `NEIGHBOUR_K` admitted decisions nearest the shape and their recent residuals: what the store already holds and where it loses. The same neighbours feed L2, so the nearest-neighbour read runs once per draft.
+   - **Only its own evidence:** `NominatorInput` refuses episodes or observations outside the shape. The backtest population's confirmed figures stay unseen, so the held-out read stays held out.
 
 **Do:** have the nominator state, in `warrant.figures_reproduced`, which source figures the drafted definition reproduces when run against the world.
 **Don't:** let the nominator write a definition it has not run. An unrun definition is a hypothesis in a payload's clothing.
@@ -246,8 +265,8 @@ For each miss, the observer (Haiku) writes an observation under the contract of 
 |---|---|---|---|
 | L0 shape | `$jsonSchema` validator; a floor spec compiles to a `$match` stage | — | refuse |
 | L1 bar | distinct templates ≥ 2 (≥ 3 for `kind: floor` and for org-scoped taxonomic drafts) | — | hold; the draft waits for more observations |
-| L2 neighbours | `$vectorSearch` top 5 admitted decisions → `rerank-3`; ≥ `NEIGHBOUR_RERANK` to one decision routes the draft as refine, supersede or duplicate | routing | a duplicate is refused; a supersede draft carries `supersedes` |
-| L3 lens panel | Jev, one `system_one` call per draft, state = draft + source observations + neighbours | corroborating | score < `LENS_THRESHOLD` → refuse, except with probability `LENS_EXPLORE_EPS`, which sends the draft to L4 anyway and marks it `explore` |
+| L2 neighbours | the nominator's `NEIGHBOUR_K` neighbours (§ 7.2) → `rerank-3`; ≥ `NEIGHBOUR_RERANK` to one decision routes the draft as refine, supersede or duplicate | routing | a duplicate is refused; a supersede draft carries `supersedes` |
+| L3 lens panel | Jev, one `system_one` call per draft, state = draft + source observations + neighbours | corroborating | `LENS_MODE=record` (default): the score is recorded and every draft passes to L4. `LENS_MODE=gate`: score < `LENS_THRESHOLD` → refuse, except a deterministic share `LENS_EXPLORE_EPS` sent to L4 and marked `explore` |
 | L4 backtest | § 7.4 | **dispositive** | admit, or refuse with the backtest record |
 | L5 owner port | an owner disposition on any draft or fire, through the CLI or the viewer | overrides L3–L4 | recorded as `disposer: owner` |
 
@@ -261,6 +280,8 @@ Lens set (each paired with its counterfactual, phrased to refute where it adjudi
 | `contradicts_neighbor` | What reading would show this draft and a neighbour can't both hold? | Do the two hooks ever match the same question? |
 | `mechanizable` (Choice: floor / taxonomic / procedural / preference / none) | Is the payload checkable as a `$match` predicate on one collection? | Name the question shape the predicate would wrongly filter. |
 
+Why L3 records rather than gates: its seed weights are unwarranted (§ 23.2), a refused draft never reaches a backtest so a gate's errors are invisible, refusals starve `lensfit` of labels, and the backtest a gate would save costs only 2 × `BACKTEST_N` proposer calls.
+
 Combination: `score = σ(b + Σ wᵢ·logit(pᵢ))`. Seed weights live in `lens_weights` version 0: `generalizes +1, case_leak −2, org_fact 0 (routing), contradicts_neighbor 0 (routing), mechanizable 0 (routing), b = 0`. The adjudicator reads the current version at each episodic pass. `org_fact` false on an org-scoped draft rescopes it to its persona, or refuses it when the sources span several personas.
 
 ### 7.4 Backtest (`learn/backtest.py`), the dispositive layer
@@ -268,16 +289,19 @@ Combination: `score = σ(b + Σ wᵢ·logit(pᵢ))`. Seed weights live in `lens_
 - **Population:** episodes in the arm's case store whose questions the draft's hook matches, excluding the draft's source episodes.
   - For a supersede draft, only episodes after the predecessor's earliest open dispositive fire. The fire marks where the world shifted.
   - Sample at most `BACKTEST_N`, balanced between episodes scored correct and episodes scored as misses on their first attempt.
-- **Replay:** re-run the proposer on each sampled question with the decisions its episode record lists as consulted, plus the draft (minus the predecessor, for a supersede draft). Score against the episode's **confirmed figure**.
-- **Read:** `fixed` = a recorded miss whose replay matches the confirmed figure; `broken` = a recorded correct answer whose replay does not.
+- **Context:** consult the arm's **current** admitted store for each sampled question, through the arm's own consultation (minus the predecessor, for a supersede draft). The episode's old `consulted` list is the context the draft will never run in.
+- **Replay, paired:** run the proposer twice on that context: once with the draft (`replay_correct`) and once without it (`baseline_correct`). Score both against the episode's **confirmed figure**. Cost: 2 × `BACKTEST_N` proposer calls per draft.
+- **Read:** `fixed` = the replay with the draft matches and the replay without it doesn't; `broken` = the replay without matches and the replay with it doesn't. A miss the proposer re-solves by chance in both replays fixes nothing. The recorded first attempt is the sampling stratum only.
 - **Read, held out:** `fixed_heldout` = the `fixed` episodes whose template is absent from the draft's sources (§ 24.2 L5).
 - **Admit** when `fixed ≥ BACKTEST_MIN_FIXED ∧ fixed_heldout ≥ BACKTEST_MIN_FIXED_HELDOUT ∧ broken ≤ BACKTEST_MAX_BROKEN`. Otherwise refuse.
-- Every backtest writes a `backtests` record, whatever the verdict: sampled episode ids, per-episode outcome, verdict.
+- Every backtest writes a `backtests` record, whatever the verdict: sampled episode ids, both replay outcomes and the consulted context per episode, verdict.
 
 **Do:** score replays only against confirmed figures from the case store.
 **Don't:** call `truth.gold` from anywhere under `learn/`. Gold is evaluation-only, and a learning loop that reads it measures nothing.
 
-Premise: poisoned drafts fail backtest, because a stale-report definition does not reproduce the other confirmed figures. False if: `planted_map` reports an N1-derived decision admitted in `governed`.
+Premise: poisoned drafts fail backtest, because a stale-report definition does not reproduce the other confirmed figures. False if: `planted_map` reports an N1-derived decision admitted in `governed`. N1 is noise that varies from episode to episode, which is exactly what a replay against other episodes catches; F2 therefore holds nearly by construction and is reported as a sanity check, not a finding.
+
+Residue: the backtest re-reads the channel the observations came from. An authority wrong the same way on every episode (Finance always using the calendar year) reproduces itself out of sample and is admitted. Nothing in this harness catches a consistently wrong authority; that is the narrower claim of § 0.
 
 ### 7.5 Supersession and retirement
 
@@ -299,11 +323,12 @@ The floor's residue: the view enforces its predicate on every pipeline against t
 
 ## 9. Second-order loop (stretch; `learn/lensfit.py`, its own process)
 
-- **Label:** each draft that reaches L4 gets one: admitted = 1, refused = 0. An admitted decision superseded or retired within `LABEL_HORIZON` episodes is relabelled 0.
+- **Label:** each draft that reaches L4 gets one: admitted = 1, refused = 0. Under `LENS_MODE=record` every draft reaches L4. An admitted decision superseded or retired within `LABEL_HORIZON` episodes is relabelled 0.
 - **Prequential reading:** before each label arrives, record the lens score's prediction. Report prequential AUC over drafts that reached L4, with a bootstrap 90% interval and its n.
 - **Fit:** at ≥ `LENSFIT_MIN_LABELS` labels with both classes present, fold lenses whose logits correlate above `LENS_FOLD_RHO`, fit `LogisticRegression(C=1.0)` on the folded logits, and write a `lens_weights` version.
 - **Dead lens:** a lens whose held-out log-loss delta stays inside the 95th percentile of a label-shuffle floor for 2 consecutive fits.
-- `explore` drafts (§ 7.3) carry the labels that make the fit read below-threshold drafts at all.
+- Under `LENS_MODE=gate`, `explore` drafts (§ 7.3) carry the labels that make the fit read below-threshold drafts at all.
+- **Claim limit:** at `LENSFIT_MIN_LABELS` ≈ 20, the fit reweights five authored lenses. The claim is the panel's prequential AUC with its interval and n; per-lens weights stay advisory (§ 24.2 L2).
 
 **Do:** grade the adjudicator only on backtest and lifecycle outcomes.
 **Don't:** fit lens weights to the adjudicator's own L3 verdicts.
@@ -319,8 +344,8 @@ Every record carries `schema_version`, `run_id` and `arm`. `$jsonSchema` validat
 
 | Store | Kind | Atlas memory-type analogue | Key fields |
 |---|---|---|---|
-| `episodes` | case store, ledger | trace / short-term | `idx, question_id, template, persona, terms, world_version (eval-only), consulted[{decision_id, disposition}], pipeline, view_map, answer, confidence, correct, figure, phrasing, confirmed_figure, retry_correct, residuals[], tokens, latency_ms` |
-| `observations` | episodic store, ledger | episodic | `episode_id, class: reducible/irreducible, noticed, surfaces{terms, collection, phrasing}, answer, figure, ratio, embedding[1024], status: open/shaped/spent/noise` |
+| `episodes` | case store, ledger | trace / short-term | `idx, question_id, template, persona, collections, terms, world_version (eval-only), consulted[{decision_id, disposition}], pipeline, view_map, answer, confidence, correct, figure, phrasing, confirmed_figure, retry_correct, residuals[], tokens, latency_ms` |
+| `observations` | episodic store, ledger | episodic | the record of § 23.1: `episode_id, via, class, noticed, surfaces, answer, figure, ratio, delta, disposition: open/shaped/spent/noise/dropped/moot, emb.<embedder_key>` |
 | `decisions` | decision store, ledger (status flips in place) | semantic / taxonomic / procedural | the entry contract (§ 10.2) |
 | `fires` | fire ledger | — | `decision_id, latch, role: dispositive/corroborating, episode_ids[], residual_ids[], disposer, disposition: applied/rejected/deferred/open, at_idx` |
 
@@ -329,7 +354,7 @@ Registers and supporting ledgers:
 | Collection | Kind | Key fields |
 |---|---|---|
 | `drafts` | ledger | entry fields + `shape_id, source_observation_ids[], adjudication{L0..L4}, explore` |
-| `backtests` | ledger | `draft_id, sampled[{episode_id, template, original_correct, replay_correct}], fixed, fixed_heldout, broken, verdict` |
+| `backtests` | ledger | `draft_id, sampled[{episode_id, template, original_correct, replay_correct, baseline_correct, context[]}], source_templates, fixed, fixed_heldout, broken, verdict` |
 | `lens_weights` | register (versioned) | `version, weights{lens: w}, folds, bias, n_labels, auc_prequential, auc_ci` |
 | `tool_access` | register | `arm, logical → view, decision_id` |
 | `cursors` | register | `run_id, arm, next_idx, round` |
@@ -439,14 +464,21 @@ Pre-registered and written to `runs` at start. Every figure is reported with its
   - decoy rejection by `org_fact` (P1-derived drafts) and `case_leak`
 - **Lens telemetry:** answer variance across the 3 phrasings of a lens on a 20-draft probe set; decoy rejection; never firing frequency.
 
-Pre-registered forecasts, written to `runs.forecasts` before the first episode and never edited. The report prints each one beside its reading, and a disagreement stands as a disagreement.
-- **F1:** the `self_ref` calibration gap over the `D1_AT…D1_AT+150` window exceeds its gap over the 150 episodes before `D1_AT`.
-- **F2:** `governed` admits 0 N1-derived decisions; `naive` admits ≥ 1.
+**Paired readings.** The arms share the stream by index, so every comparison between two arms is a paired difference: the mean of `a[i] − b[i]` over the same stream indices, with a percentile bootstrap interval at `CI_LEVEL` (`BOOTSTRAP_N` resamples) and its n (`metrics/paired.py`). A forecast's verdict is three-way against its pre-registered margin m: **above** (lower bound > +m), **below** (upper bound < −m), **within** (otherwise: the reading does not resolve it at m).
+
+Pre-registered forecasts live in `conf/forecasts.yaml` (claim, reading, margin, unit), are written to `runs.forecasts` before the first episode of the run they govern, and are never edited after it. The report prints each one beside its reading, and a disagreement stands as a disagreement.
+- **F1:** an arm holding a pre-D1 Q1 decision shows a calibration gap over `D1_AT…D1_AT+150` above its gap over the 150 episodes before `D1_AT`, until a successor is admitted (margin 0.05). `frozen` with the stream on is the no-decision reference.
+- **F2 (sanity check, not a finding; § 7.4):** `governed` admits 0 N1-derived decisions; `naive` admits ≥ 1.
 - **F3:** `naive` holds P1 at org scope; `governed` holds it at persona scope or not at all.
-- **F4:** `governed` drift-to-supersede latency for D1 is below `naive`'s (where `naive` resolves the drift at all).
-- **F5:** on quirk-bearing stream questions after round 10, `governed` stream accuracy ≥ `naive`'s.
+- **F4:** `governed` drift-to-supersede latency for D1 is below `naive`'s and `ungated`'s, where those arms resolve the drift at all (margin 30 episodes; one event per arm, so no interval).
+- **F5:** on quirk-bearing stream questions after round 10, `governed − naive` is above the margin (0.05). The confounds of § 5 are printed beside it.
+- **F6:** on quirk-bearing stream questions after round 10, `governed − ungated` is above the margin (0.05): the effect of the gate.
+
+**Run A is a pilot.** If any knob moves between Run A and Run B (§ 13), Run B's forecasts are re-registered at its start, and the report lists every knob that moved (the diff of the two `runs.knobs`).
 
 ## 12. Pilot gate and model hedge
+
+The pilot gate runs first in M1: as soon as the control templates and Q1 exist, before the rest of the pack is written. If the proposer can't answer the controls, nothing downstream matters.
 
 - **Premise:** the frozen proposer scores ≤ 35% on quirk-bearing questions and ≥ 70% on controls, over 40 stream questions.
   False if the pilot reads otherwise. On failing high, rename the remaining mnemonic fields, then lower the proposer model. On failing low on controls, raise the proposer model or cut the failing templates.
@@ -459,17 +491,22 @@ Pre-registered forecasts, written to `runs.forecasts` before the first episode a
 | Time | Milestone | Done when |
 |---|---|---|
 | 10:30–11:00 | **M0 scaffold + schema lock** | uv project; sandbox connection; sample data loaded and unused sample databases dropped; `store.setup()` creates collections, validators and indexes; the schema import commit (§ 15) precedes every engine commit |
-| 11:00–12:00 | **M1 world** | adapter, `analytics-v1` pack, transform registry, gold, questions, scorer and authority; gold tests pass; the pilot gate (§ 12) reads in range |
+| 11:00–12:00 | **M1 world** | controls + Q1 and the proposer call first, then the pilot gate (§ 12); then adapter, `analytics-v1` pack, transform registry, gold, questions, scorer and authority; gold and gold-isolation tests pass |
 | 12:00–12:45 | **M2 forward pass** | hooks, proposer, views + tool-access register, execute, residuals, revisit guards, cursors; the `frozen` and `naive` arms run 60 episodes and resume after a kill |
-| 12:45–14:00 | **M3 backward pass** | observer + noise filter, episodic pass, nominator with the world tool, L0–L4, backtest, supersession, `self_ref`; a 150-episode smoke run admits ≥ 1 decision in `governed` |
-| 14:00 | **Run A** starts: all arms, `RUN_LENGTH` episodes each, drifts at `D1_AT` / `D2_AT`. It runs in the background while the viewer is built. Fixes found in run A ship in run B. | — |
+| 12:45–14:00 | **M3 backward pass** | observer + noise filter, episodic pass with the direction read, nominator with the world tool and neighbours, L0–L4, paired backtest, supersession, `ungated`, the `naive` lesson writer, `self_ref`; a 150-episode smoke run admits ≥ 1 decision in `governed` |
+| 14:00 | **Run A** (the pilot, § 11) starts: all arms, `RUN_LENGTH` episodes each, drifts at `D1_AT` / `D2_AT`. It runs in the background while the viewer is built. Fixes found in run A ship in run B. | — |
 | 14:00–15:15 | **M4 viewer** | decision store pane (latch fan, evidence state, backtest record), fire ticker, curves (accuracy + calibration gap), `why`, replay scrubber by `idx`, the injection control for the live beat |
 | 15:15–15:45 | **M5 tracing + lensfit** | Raindrop signals; `lensfit` reads run A |
 | 15:45 | **Run B** (the demo run) starts if run A exposed a defect; otherwise run A is the demo run | — |
 | 15:45–16:30 | **M6 story** | demo rehearsed on the replay; 1-minute video recorded; README states what was built on the day |
 | 16:30–17:00 | **Buffer + submit** | public repo, video, every field filled |
 
-Cut order if behind: Part II post-event rows → § 9 → context policy → D2 → `self_ref` (the calibration gap is then read from `naive` alone, and § 0's claim 3 is reported as untested) → Raindrop. **Verify** in Discord at kickoff whether the RSI prize requires Raindrop; if it does, Raindrop moves to the end of the cut order.
+Cut order if behind: Part II post-event rows → § 9 → `self_ref` (§ 0's claim 3 is then reported as untested; F1 is read from the arms that hold a stale decision) → context policy → D2 → Raindrop. **Verify** in Discord at kickoff whether the RSI prize requires Raindrop; if it does, Raindrop moves to the end of the cut order.
+
+**Protect one complete story.** The central demonstration is a decision that is admitted, reaches a new situation, changes behaviour, and is corrected when its grounds move: Q1 is learned and applied on a template absent from its sources; D1 fires; the decision is superseded with a tombstone; recovery shows on the paired curve; plus the floor-view beat. The minimum configuration that still tests the claim:
+- **Quirks:** Q1 (with D1), Q3 (floor plus decoy), Q5, P1 and N1, one quirk per template.
+- **Arms:** `frozen` (stream on), `naive`, `ungated`, `governed`.
+- **Layers:** L2 routes every draft as new, except a supersede the nominator declares against a contested neighbour (one with an open dispositive fire); L3 records only; `lensfit` is cut.
 
 **Do:** run the engine where a sleeping laptop can't stop it (a cloud VM, or `caffeinate` with power attached).
 **Don't:** start a run without `run_id` resumption tested at M2.
@@ -478,10 +515,11 @@ Cut order if behind: Part II post-event rows → § 9 → context policy → D2 
 
 Stated so a reader of `gce/GCE-DOCTRINE.md` meets no unannounced contradiction.
 
-1. **The owner seat is held by a stand-in.** The doctrine's admission is owner-performed, and the world only contradicts. Here the stand-in adjudicator admits, and the backtest (the world's confirmed figures) is the dispositive authority. The owner remains a port (L5) that can override any disposition, and the demo exercises it once. Rationale: the demo shows a fully autonomous loop. The doctrine's ideal is a human.
+1. **The owner seat is held by a stand-in.** The doctrine's admission is owner-performed, and the world only contradicts. Here the stand-in adjudicator admits, and the backtest (the authority's confirmed figures, replayed out of sample) is the dispositive check. That inverts the doctrine's promotion asymmetry, so the claim is narrowed to match (§ 0): the backtest reads the authority, not the world, and a consistently wrong authority passes it. The owner remains a port (L5) that can override any disposition, and the demo exercises it once. Rationale: the demo shows a fully autonomous loop. The doctrine's ideal is a human.
 2. **Embeddings sit in the path for grouping observations into shapes, for L2 routing, and for naive retrieval**, never in `governed` consultation, which is hook-keyed. The embedder is a port (§ 21), and non-embedding groupers are first-class (§ 24.1).
 3. **Supersession is whole-record**, not per-region. A drift that widens a set supersedes the decision that holds the set.
-4. **Lenses are independent of the proposer only approximately.** Jev differs in family from the proposer and the nominator but shares pretraining priors with them. The dispositive check is the backtest, never the lens panel.
+4. **Lenses are independent of the proposer only approximately.** Jev differs in family from the proposer and the nominator but shares pretraining priors with them. The dispositive check is the backtest, never the lens panel, and by default the panel records rather than gates (§ 7.3).
+5. **No slot-factored backward pass.** The doctrine routes evidence to one slot of the entry (activation, payload, warrant, enforcement, lifecycle), which picks a local operator. Here every revisit trigger leads to a whole-record re-derive, so a hook that misfires and a payload that went stale look the same. That fits D1, which is a payload change. Post-event avenue: residuals with `considered-not-applicable` dispositions route to activation amendments (§ 24.2 L10), and signature-matched residuals on applied decisions route to the payload.
 
 ## 15. Provenance and extensibility
 
@@ -501,16 +539,19 @@ This table seeds `engine/munchhausen/config.py`, together with the Part II knobs
 | `RUN_LENGTH` | 900 | `WORKERS_PER_ARM` | 6 |
 | `D1_AT` | 300 | `D2_AT` | 600 |
 | `AUTHORITY_LEVEL` | term | `AUTHORITY_POISON_RATE` | 0.05 |
-| `V_SIZE` | 40 | `V_EVERY` | 300 |
-| `FROZEN_STREAM` | false | `CONTEXT_BUDGET_TOKENS` | 900 |
+| `V_SIZE` | 40 | `V_EVERY` / `V_OFFSET` | 150 / 75 |
+| `FROZEN_STREAM` | true | `CONTEXT_BUDGET_TOKENS` | 900 |
 | `NAIVE_TOP_K` | 8 | `NAIVE_MERGE_COSINE` | 0.92 |
 | `CLUSTER_DISTANCE` | 0.35 | `BAR_MIN_OBS` / `BAR_MIN_TEMPLATES` | 2 / 2 |
+| `BAR_MIN_GAP` / `BAR_MIN_MATCHED` | 0.10 / 10 | `CARRY_ROUNDS` | unset (carry all) |
+| `NEIGHBOUR_K` | 5 | `LENS_MODE` | record |
 | `NEIGHBOUR_RERANK` | 0.85 | `LENS_THRESHOLD` | 0.5 |
 | `LENS_EXPLORE_EPS` | 0.1 | `BACKTEST_N` | 8 |
 | `BACKTEST_MIN_FIXED` / `BACKTEST_MAX_BROKEN` | 2 / 1 | `FIRE_MIN_RESIDUALS` / `FIRE_WINDOW` | 2 / 30 |
 | `RETIRE_IDLE` / `RETIRE_FIRES` | 300 / 6 | `LABEL_HORIZON` | 150 |
 | `LENSFIT_MIN_LABELS` | 20 | `LENS_FOLD_RHO` | 0.8 |
 | `PROPOSER_MODEL` | claude-haiku-4-5 | `NOMINATOR_MODEL` | claude-sonnet-5-5 |
+| `NAIVE_LESSON_MODEL` | claude-sonnet-5-5 | `BOOTSTRAP_N` / `CI_LEVEL` | 2000 / 0.90 |
 
 ## 17. Viewer (`viewer/`)
 
@@ -527,7 +568,7 @@ The panes are fed by change streams, and every pane can also be driven by the re
 
 ## 18. Demo script (3 minutes)
 
-1. **(40 s) The problem, on the curves.** After D1, `self_ref`'s confidence holds flat while its accuracy falls: self-reference certifies the stale rule. `governed` dips, fires, supersedes and recovers.
+1. **(40 s) The problem, on the curves.** After D1, an arm holding the pre-D1 active-customer decision stays confident while its accuracy falls: nothing in it reads the shift. `governed` dips, fires, supersedes and recovers, shown as the paired difference against `frozen` with its interval.
 2. **(70 s) Live: lie to the agent.** A judge enters a false figure through the injection control. The draft appears, its lens answers show, and the backtest refuses it (0 fixed, 2 broken). Then the floor beat: the `soft_delete` decision's view, and the pipeline whose row count changed.
 3. **(50 s) Lineage.** `why active_customer` shows the decision, its residual fires after D1, the successor's backtest, and the tombstone chain. Then one owner override through L5.
 4. **(20 s) What was built on the day versus the imported schemas; the MongoDB pieces used** (views as tool access, change streams, Vector Search, `$graphLookup`, Voyage `rerank-3`).
@@ -631,13 +672,13 @@ Every optional surface sits behind a port: a Python `Protocol` in `munchhausen/p
 | `Representation` | embedding vs non-embedding, and its version | `voyage-4`, `voyage-4-lite`, `atlas-autoembed`, `tfidf-online`, `signature`, `none` | `id`, `dim`, `embed(texts, role: observation|decision|query) -> ndarray | None`. Each vector is stamped `rep.embedder_id`. A record holds `emb.<embedder_id>`, so versions coexist and switching versions never re-embeds history in place. `tfidf-online` fits only on rows earlier than the one it embeds. |
 | `Similarity` | how neighbours are found | `atlas-vector`, `atlas-exact`, `atlas-hybrid`, `numpy`, `behavioural` | `knn(store, query, k, filter) -> [(id, score)]`. `behavioural` scores two decisions by the share of backtest episodes where both change the answer (§ 24.1 E6). |
 | `Grouper` | observations → shapes | `agglomerative`, `atlas-knn-graph`, `tfidf-blocks`, `signature-buckets`, `external` | `group(observations) -> [Shape]`. The coherence guard (§ 7.2) runs on every grouper's output. |
-| `Curator` | decision curation: what turns a draft into a decision | `governed` (L0–L5), `naive` (L0 → admit), `self_ref` (self-grade → admit), `hitl` (L0–L4, then owner required) | an ordered list of `Layer`s, each declaring `role: routing|corroborating|dispositive`. A curator with no dispositive layer is reported as ungoverned. |
+| `Curator` | decision curation: what turns a draft into a decision | `governed` (L0–L5), `ungated` (L0 → admit, over `governed`'s drafts), `naive` (`LessonShape` → admit), `self_ref` (self-grade, `LessonShape` → admit), `hitl` (L0–L4, then owner required) | an ordered list of `Layer`s, each declaring `role: routing|corroborating|dispositive`. A curator with no dispositive layer is reported as ungoverned. |
 | `LensPanel` | the corroborating panel | `jev`, `claude`, `ridge-surrogate`, `none` | `score(draft, sources, neighbours) -> {lens: p}`. Reads only the fields its lens entries' `pointer` names (§ 23.2). |
 | `Store` | Atlas access | `atlas` | repositories per store, plus `capabilities()`: `vector_search`, `search_indexes_left`, `auto_embed`, `rank_fusion`, `score_fusion`, `change_streams`, `transactions`, `agent_engine`. No module outside `store/` imports `pymongo`, and an import test asserts it. |
 | `MemorySink` | the downstream memory product | `null`, `agent_engine` | `publish(decision)`, `withdraw(decision_id, reason)`. Called from the lifecycle functions only. |
 | `Trace` | observability | `null`, `jsonl`, `raindrop` | `begin(episode)`, `signal(name, value, comment?)`, `event(name, payload)`, `finish(output)`. Write-only; nothing on the learning path reads it. |
 | `SignalSource` | external read-back | `none`, `raindrop` | `shapes(since_idx) -> [Shape]`, handed to the `external` grouper. Corroborating only (§ 25). |
-| `Models` | LLM calls | `anthropic` | one function per party (proposer, observer, nominator, planted-map judge); model ids from config. |
+| `Models` | LLM calls | `anthropic` | one function per party (proposer, observer, nominator, `naive` lesson writer, `self_ref` self-grade, planted-map judge); model ids from config. |
 
 Port invariants:
 - Every port has an offline or null implementation, so the engine runs with no network beyond Atlas and Anthropic.
@@ -812,7 +853,7 @@ Each avenue is a port selection or a knob (§ 21) with the reading that settles 
 | E1 | Embeddings locate signal but recover identity. On templated text, clusters can track collection and template rather than concept. | `EMBED_MASK=none|surfaces`: embed `noticed` raw vs with collection, field and template tokens masked | ARI between the two partitions; shapes that survive masking | day |
 | E2 | On templated questions, TF-IDF blocks recover the templates, and residual signatures carry the concept with no text at all | `Grouper` = `agglomerative`(voyage-4) vs `tfidf-blocks` vs `signature-buckets` | share of shapes clearing `BAR_MIN_TEMPLATES`; quirk recall from `planted_map` | day (signature-buckets is cheap) |
 | E3 | Read a partition for stability before trusting it | sweep `CLUSTER_DISTANCE` ∈ {0.25, 0.35, 0.45}, and across `Representation`s | share of shapes persisting across settings (co-association) | post-event |
-| E4 | A shape formed from misses is selected on the outcome | pre-nominate direction read: the shape's hook over all matched episodes, hits included | miss rate inside vs outside the hook; refuse a shape with no gap | day (one aggregation) |
+| E4 | A shape formed from misses is selected on the outcome | pre-nominate direction read over all matched episodes, hits included; **promoted into the bar** (§ 7.2) | miss rate inside vs outside the shape's presentation; refuse a shape with no gap | day (part of the bar) |
 | E5 | Miss triage has three kinds: noise, parameter, structure | add `class: parameter` (a constant ratio across all templates: a unit or scale miss) kept off the nominator | share of parameter-class misses; nominator spend saved | post-event |
 | E6 | Wording similarity does not predict answer similarity | `Similarity` for L2 = `atlas-vector`+`rerank-3` vs `behavioural` | duplicate and supersede routing agreement with backtest outcomes | post-event |
 | E7 | A learned surrogate is cheap where a zero-shot one is not | `LensPanel=ridge-surrogate`: ridge on the draft's embedding predicting the backtest verdict, as a pre-L3 screen | prequential AUC vs `jev` at equal n | post-event |
@@ -854,7 +895,7 @@ Raindrop is a `Trace` and a `SignalSource` (§ 21), off unless `RAINDROP_WRITE_K
 | fire, admission, supersession, moot, retirement | `track_ai(event=<name>, input=draft or fire, output=verdict)` | lens answers and the backtest record as attachments |
 | model calls | `tracing_enabled=True` auto-instruments the Anthropic client | spans per party |
 
-Arms become Raindrop experiment variants through the `arm` property, so Raindrop's own experiment view compares `frozen`, `self_ref`, `naive` and `governed` on the same signals.
+Arms become Raindrop experiment variants through the `arm` property, so Raindrop's own experiment view compares `frozen`, `self_ref`, `naive`, `ungated` and `governed` on the same signals.
 
 ### 25.2 Read path (`SignalSource=raindrop`, post-event or M5 stretch)
 

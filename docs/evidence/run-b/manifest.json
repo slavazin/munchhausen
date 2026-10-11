@@ -1,0 +1,518 @@
+{
+  "run_id": "run-b",
+  "figures": {
+    "curve.accuracy.frozen": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'frozen', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "curve.calibration_gap.frozen": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'frozen', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "curve.accuracy.naive": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'naive', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "curve.calibration_gap.naive": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'naive', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "curve.accuracy.ungated": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'ungated', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "curve.calibration_gap.ungated": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'ungated', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "curve.accuracy.governed": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'governed', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "curve.calibration_gap.governed": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'governed', stream: 'stream'}) | metrics.readings.stream_curve",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "curve.v_accuracy.frozen": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'frozen', stream: 'v'}) | metrics.readings.v_points",
+      "n": 160,
+      "unit": "accuracy (fraction)"
+    },
+    "curve.v_accuracy.naive": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'naive', stream: 'v'}) | metrics.readings.v_points",
+      "n": 160,
+      "unit": "accuracy (fraction)"
+    },
+    "curve.v_accuracy.ungated": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'ungated', stream: 'v'}) | metrics.readings.v_points",
+      "n": 160,
+      "unit": "accuracy (fraction)"
+    },
+    "curve.v_accuracy.governed": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: 'governed', stream: 'v'}) | metrics.readings.v_points",
+      "n": 160,
+      "unit": "accuracy (fraction)"
+    },
+    "forecast.F1.F1.ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'ungated', stream: 'stream', idx: {$gte: 150, $lt: 360}}) | metrics.readings.drift_calibration(drift='D1')",
+      "n": 60,
+      "unit": "accuracy points (calibration gap, after \u2212 before)"
+    },
+    "forecast.F1.F1.governed": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'governed', stream: 'stream', idx: {$gte: 150, $lt: 450}}) | metrics.readings.drift_calibration(drift='D1')",
+      "n": 150,
+      "unit": "accuracy points (calibration gap, after \u2212 before)"
+    },
+    "forecast.F2.planted_count.N1.frozen": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'frozen'}) | metrics.readings.planted_count(prefix='N1')",
+      "n": 0,
+      "unit": "decisions"
+    },
+    "forecast.F2.planted_count.N1.self_ref": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'self_ref'}) | metrics.readings.planted_count(prefix='N1')",
+      "n": 0,
+      "unit": "decisions"
+    },
+    "forecast.F2.planted_count.N1.naive": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'naive'}) | metrics.readings.planted_count(prefix='N1')",
+      "n": 239,
+      "unit": "decisions"
+    },
+    "forecast.F2.planted_count.N1.ungated": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'ungated'}) | metrics.readings.planted_count(prefix='N1')",
+      "n": 13,
+      "unit": "decisions"
+    },
+    "forecast.F2.planted_count.N1.governed": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'governed'}) | metrics.readings.planted_count(prefix='N1')",
+      "n": 3,
+      "unit": "decisions"
+    },
+    "forecast.F3.planted_scope.P1.frozen": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'frozen'}) | metrics.readings.planted_scope(prefix='P1')",
+      "n": 0,
+      "unit": "scope labels"
+    },
+    "forecast.F3.planted_scope.P1.self_ref": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'self_ref'}) | metrics.readings.planted_scope(prefix='P1')",
+      "n": 0,
+      "unit": "scope labels"
+    },
+    "forecast.F3.planted_scope.P1.naive": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'naive'}) | metrics.readings.planted_scope(prefix='P1')",
+      "n": 1,
+      "unit": "scope labels"
+    },
+    "forecast.F3.planted_scope.P1.ungated": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'ungated'}) | metrics.readings.planted_scope(prefix='P1')",
+      "n": 1,
+      "unit": "scope labels"
+    },
+    "forecast.F3.planted_scope.P1.governed": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'governed'}) | metrics.readings.planted_scope(prefix='P1')",
+      "n": 0,
+      "unit": "scope labels"
+    },
+    "forecast.F4.F4.naive-governed": {
+      "query": "munchhausen.decisions.find({run_id: R, arm: {$in: ['naive', 'governed']}}) | metrics.readings.drift_latency(drift='D1')",
+      "n": 0,
+      "unit": "episodes"
+    },
+    "forecast.F4.F4.ungated-governed": {
+      "query": "munchhausen.decisions.find({run_id: R, arm: {$in: ['ungated', 'governed']}}) | metrics.readings.drift_latency(drift='D1')",
+      "n": 1,
+      "unit": "episodes"
+    },
+    "forecast.F5.paired_accuracy.governed-naive": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: {$in: ['governed', 'naive']}, stream: 'stream'}) | metrics.readings.paired_accuracy(a='governed', b='naive', after_round=10)",
+      "n": 254,
+      "unit": "accuracy (fraction)"
+    },
+    "forecast.F6.paired_accuracy.governed-ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: {$in: ['governed', 'ungated']}, stream: 'stream'}) | metrics.readings.paired_accuracy(a='governed', b='ungated', after_round=10)",
+      "n": 254,
+      "unit": "accuracy (fraction)"
+    },
+    "forecast.F7.paired_accuracy.governed-ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: {$in: ['governed', 'ungated']}, stream: 'stream'}) | metrics.readings.paired_accuracy(a='governed', b='ungated', after_round=10)",
+      "n": 46,
+      "unit": "accuracy (fraction)"
+    },
+    "frozen.stream_accuracy": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'frozen', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "frozen.calibration_gap": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'frozen', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "frozen.errored_episodes": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'frozen', stream: 'stream', error: /^episode_failed/}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "episodes"
+    },
+    "naive.stream_accuracy": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'naive', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "naive.calibration_gap": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'naive', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "naive.errored_episodes": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'naive', stream: 'stream', error: /^episode_failed/}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "episodes"
+    },
+    "ungated.stream_accuracy": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'ungated', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "ungated.calibration_gap": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'ungated', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "ungated.errored_episodes": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'ungated', stream: 'stream', error: /^episode_failed/}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "episodes"
+    },
+    "governed.stream_accuracy": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'governed', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy (fraction)"
+    },
+    "governed.calibration_gap": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'governed', stream: 'stream', error: {$not: /^episode_failed/}}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "accuracy points (mean confidence \u2212 accuracy)"
+    },
+    "governed.errored_episodes": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'governed', stream: 'stream', error: /^episode_failed/}) | metrics.readings.arm_summary",
+      "n": 600,
+      "unit": "episodes"
+    },
+    "stale_applied.ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'ungated', stream: 'stream'}) | metrics.readings.stale_applied(drift='D1')",
+      "n": 65,
+      "unit": "share of episodes"
+    },
+    "stale_applied.governed": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'governed', stream: 'stream'}) | metrics.readings.stale_applied(drift='D1')",
+      "n": 65,
+      "unit": "share of episodes"
+    },
+    "quirk_recall.frozen": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'frozen'}) | metrics.readings.quirk_recall",
+      "n": 5,
+      "unit": "share of template quirks"
+    },
+    "quirk_recall.self_ref": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'self_ref'}) | metrics.readings.quirk_recall",
+      "n": 5,
+      "unit": "share of template quirks"
+    },
+    "quirk_recall.naive": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'naive'}) | metrics.readings.quirk_recall",
+      "n": 5,
+      "unit": "share of template quirks"
+    },
+    "quirk_recall.ungated": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'ungated'}) | metrics.readings.quirk_recall",
+      "n": 5,
+      "unit": "share of template quirks"
+    },
+    "quirk_recall.governed": {
+      "query": "munchhausen.planted_map.find({run_id: R, arm: 'governed'}) | metrics.readings.quirk_recall",
+      "n": 5,
+      "unit": "share of template quirks"
+    },
+    "backtest.admit_rate.governed": {
+      "query": "munchhausen.backtests.find({run_id: R, arm: 'governed'}) | metrics.readings.backtest_summary",
+      "n": 18,
+      "unit": "share of backtests"
+    },
+    "backtest.fixed_hist.governed": {
+      "query": "munchhausen.backtests.find({run_id: R, arm: 'governed'}) | metrics.readings.backtest_summary",
+      "n": 18,
+      "unit": "backtests per fixed count"
+    },
+    "backtest.broken_hist.governed": {
+      "query": "munchhausen.backtests.find({run_id: R, arm: 'governed'}) | metrics.readings.backtest_summary",
+      "n": 18,
+      "unit": "backtests per broken count"
+    },
+    "backtest.premise.governed": {
+      "query": "munchhausen.backtests.find({run_id: R, arm: 'governed'}) | metrics.readings.backtest_summary",
+      "n": 57,
+      "unit": "share of encoded misses fixed"
+    },
+    "supersession_audit.ungated": {
+      "query": "munchhausen.decisions.find({run_id: R, arm: 'ungated', 'lifecycle.status': 'superseded'}) | metrics.readings.supersession_audit",
+      "n": 3,
+      "unit": "supersessions after a dispositive fire"
+    },
+    "supersession_audit.governed": {
+      "query": "munchhausen.decisions.find({run_id: R, arm: 'governed', 'lifecycle.status': 'superseded'}) | metrics.readings.supersession_audit",
+      "n": 1,
+      "unit": "supersessions after a dispositive fire"
+    },
+    "E9.self_ref-over-ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: {$in: ['self_ref', 'ungated']}, stream: 'stream'}) | metrics.readings.retrieval_lead",
+      "n": 0,
+      "unit": "share of lead indices"
+    },
+    "E9.self_ref-over-governed": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: {$in: ['self_ref', 'governed']}, stream: 'stream'}) | metrics.readings.retrieval_lead",
+      "n": 0,
+      "unit": "share of lead indices"
+    },
+    "E9.naive-over-ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: {$in: ['naive', 'ungated']}, stream: 'stream'}) | metrics.readings.retrieval_lead",
+      "n": 17,
+      "unit": "share of lead indices"
+    },
+    "E9.naive-over-governed": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: {$in: ['naive', 'governed']}, stream: 'stream'}) | metrics.readings.retrieval_lead",
+      "n": 35,
+      "unit": "share of lead indices"
+    },
+    "spend.usd.frozen": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 760,
+      "unit": "USD (list price)"
+    },
+    "spend.usd_per_episode.frozen": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 600,
+      "unit": "USD per stream episode"
+    },
+    "spend.usd.governed": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 2683,
+      "unit": "USD (list price)"
+    },
+    "spend.usd_per_episode.governed": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 600,
+      "unit": "USD per stream episode"
+    },
+    "spend.usd.naive": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 2877,
+      "unit": "USD (list price)"
+    },
+    "spend.usd_per_episode.naive": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 600,
+      "unit": "USD per stream episode"
+    },
+    "spend.usd.ungated": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 1720,
+      "unit": "USD (list price)"
+    },
+    "spend.usd_per_episode.ungated": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model) | metrics.readings.spend_readings",
+      "n": 600,
+      "unit": "USD per stream episode"
+    },
+    "models.served.embed": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 987,
+      "unit": "model ids"
+    },
+    "models.served.lesson": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 245,
+      "unit": "model ids"
+    },
+    "models.served.nominate": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 225,
+      "unit": "model ids"
+    },
+    "models.served.observe": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 806,
+      "unit": "model ids"
+    },
+    "models.served.propose": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 3040,
+      "unit": "model ids"
+    },
+    "models.served.replay": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 568,
+      "unit": "model ids"
+    },
+    "models.served.rerank": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 1331,
+      "unit": "model ids"
+    },
+    "models.served.retry": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id = R; $group arm \u00d7 stage \u00d7 model; served_model, error) | metrics.readings.models_served",
+      "n": 838,
+      "unit": "model ids"
+    },
+    "lifecycle.naive": {
+      "query": "munchhausen.decisions.find({run_id: R, arm: 'naive'}) | metrics.readings.lifecycle_counts",
+      "n": 239,
+      "unit": "decisions per lifecycle status"
+    },
+    "lifecycle.ungated": {
+      "query": "munchhausen.decisions.find({run_id: R, arm: 'ungated'}) | metrics.readings.lifecycle_counts",
+      "n": 13,
+      "unit": "decisions per lifecycle status"
+    },
+    "lifecycle.governed": {
+      "query": "munchhausen.decisions.find({run_id: R, arm: 'governed'}) | metrics.readings.lifecycle_counts",
+      "n": 3,
+      "unit": "decisions per lifecycle status"
+    },
+    "floor.rewires.ungated": {
+      "query": "munchhausen.tool_access.find({run_id: R, arm: 'ungated'}) | metrics.readings.floor_readings",
+      "n": 1,
+      "unit": "rewired collections"
+    },
+    "floor.view_filtered.ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'ungated', stream: 'stream', view_map: {$ne: {}}}) | metrics.readings.floor_readings",
+      "n": 600,
+      "unit": "episodes"
+    },
+    "floor.rewires.governed": {
+      "query": "munchhausen.tool_access.find({run_id: R, arm: 'governed'}) | metrics.readings.floor_readings",
+      "n": 1,
+      "unit": "rewired collections"
+    },
+    "floor.view_filtered.governed": {
+      "query": "munchhausen.episodes.find({run_id: R, arm: 'governed', stream: 'stream', view_map: {$ne: {}}}) | metrics.readings.floor_readings",
+      "n": 600,
+      "unit": "episodes"
+    },
+    "injection.drafts": {
+      "query": "munchhausen.drafts.find({run_id: R, source: 'injection'}) | metrics.readings.injection_readings",
+      "n": 0,
+      "unit": "drafts"
+    },
+    "injection.backtests": {
+      "query": "munchhausen.drafts.find({run_id: R, source: 'injection'}) | metrics.readings.injection_readings",
+      "n": 0,
+      "unit": "backtests per verdict"
+    },
+    "injection.episodes": {
+      "query": "munchhausen.episodes.find({run_id: R, stream: 'injection'}) | metrics.readings.injection_readings",
+      "n": 0,
+      "unit": "episodes"
+    },
+    "injection.events": {
+      "query": "var/runs/R/events.jsonl name ^injection. | metrics.readings.injection_readings",
+      "n": 0,
+      "unit": "trace events"
+    },
+    "sandbox.guard_refusals.frozen": {
+      "query": "munchhausen.episodes.find({run_id: R, error: /^PipelineRefused/}) | metrics.readings.sandbox_readings",
+      "n": 760,
+      "unit": "refused pipelines"
+    },
+    "sandbox.guard_refusals.self_ref": {
+      "query": "munchhausen.episodes.find({run_id: R, error: /^PipelineRefused/}) | metrics.readings.sandbox_readings",
+      "n": 0,
+      "unit": "refused pipelines"
+    },
+    "sandbox.guard_refusals.naive": {
+      "query": "munchhausen.episodes.find({run_id: R, error: /^PipelineRefused/}) | metrics.readings.sandbox_readings",
+      "n": 760,
+      "unit": "refused pipelines"
+    },
+    "sandbox.guard_refusals.ungated": {
+      "query": "munchhausen.episodes.find({run_id: R, error: /^PipelineRefused/}) | metrics.readings.sandbox_readings",
+      "n": 760,
+      "unit": "refused pipelines"
+    },
+    "sandbox.guard_refusals.governed": {
+      "query": "munchhausen.episodes.find({run_id: R, error: /^PipelineRefused/}) | metrics.readings.sandbox_readings",
+      "n": 760,
+      "unit": "refused pipelines"
+    },
+    "spend.not_metered": {
+      "query": "none: not recorded in spend",
+      "n": 0,
+      "unit": "call kinds"
+    },
+    "E8.lead.naive": {
+      "query": "munchhausen.observations.find({run_id: R, arm: 'naive', disposition: {$ne: 'noise'}, via: {$ne: 'injection'}}, {round, episode_id, emb.<key>}) + fires | metrics.readings.novelty_lead",
+      "n": 0,
+      "unit": "episodes"
+    },
+    "E8.lead.ungated": {
+      "query": "munchhausen.observations.find({run_id: R, arm: 'ungated', disposition: {$ne: 'noise'}, via: {$ne: 'injection'}}, {round, episode_id, emb.<key>}) + fires | metrics.readings.novelty_lead",
+      "n": 1,
+      "unit": "episodes"
+    },
+    "E8.lead.governed": {
+      "query": "munchhausen.observations.find({run_id: R, arm: 'governed', disposition: {$ne: 'noise'}, via: {$ne: 'injection'}}, {round, episode_id, emb.<key>}) + fires | metrics.readings.novelty_lead",
+      "n": 0,
+      "unit": "episodes"
+    },
+    "curve.novelty.naive": {
+      "query": "munchhausen.observations.find({run_id: 'run-b', arm: 'naive', disposition: {$ne: 'noise'}, via: {$ne: 'injection'}}, {round, episode_id, emb.<registered key>}) | metrics.readings.novelty_curve",
+      "n": 233,
+      "unit": "cosine distance (mean of per-observation minimum)",
+      "note": "exploratory, not pre-registered"
+    },
+    "curve.novelty.ungated": {
+      "query": "munchhausen.observations.find({run_id: 'run-b', arm: 'ungated', disposition: {$ne: 'noise'}, via: {$ne: 'injection'}}, {round, episode_id, emb.<registered key>}) | metrics.readings.novelty_curve",
+      "n": 94,
+      "unit": "cosine distance (mean of per-observation minimum)",
+      "note": "exploratory, not pre-registered"
+    },
+    "curve.novelty.governed": {
+      "query": "munchhausen.observations.find({run_id: 'run-b', arm: 'governed', disposition: {$ne: 'noise'}, via: {$ne: 'injection'}}, {round, episode_id, emb.<registered key>}) | metrics.readings.novelty_curve",
+      "n": 233,
+      "unit": "cosine distance (mean of per-observation minimum)",
+      "note": "exploratory, not pre-registered"
+    },
+    "curve.paired_vs_frozen.naive": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: {$in: ['naive', 'frozen']}, stream: 'stream'}) | metrics.readings.rolling_paired",
+      "n": 1710,
+      "unit": "accuracy (fraction), paired difference"
+    },
+    "curve.paired_vs_frozen.ungated": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: {$in: ['ungated', 'frozen']}, stream: 'stream'}) | metrics.readings.rolling_paired",
+      "n": 1710,
+      "unit": "accuracy (fraction), paired difference"
+    },
+    "curve.paired_vs_frozen.governed": {
+      "query": "munchhausen.episodes.find({run_id: 'run-b', arm: {$in: ['governed', 'frozen']}, stream: 'stream'}) | metrics.readings.rolling_paired",
+      "n": 1710,
+      "unit": "accuracy (fraction), paired difference"
+    },
+    "timeline": {
+      "query": "munchhausen.decisions.find({run_id: 'run-b'}) + fires | metrics.readings.timeline",
+      "n": 1403,
+      "unit": "records"
+    },
+    "spend": {
+      "query": "munchhausen.spend.aggregate($match meta.run_id; $group arm \u00d7 stage \u00d7 model)",
+      "n": 8040,
+      "unit": "calls"
+    }
+  }
+}
