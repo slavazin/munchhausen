@@ -87,7 +87,7 @@ class AnthropicModels:
     # --- shared call path --------------------------------------------------------------------------
 
     async def parse(self, *, stage: str, arm: str, model: str, system: str, user: str, wire: type[W],
-                     effort: str | None = None, max_tokens: int = 16000) -> W:
+                     effort: str | None = None, max_tokens: int = 16000, temperature: float | None = None) -> W:
         """One structured call. Every call writes a `spend` row — a failed call too (`ok=False`, the
         exception class), so failures are evidence. With `RESPONSE_CACHE`, a hit returns the stored parsed
         output and writes a zero-token row with `request_id="cache"` (trace-invariance replay, SPEC § 21)."""
@@ -100,6 +100,8 @@ class AnthropicModels:
         kwargs: dict[str, Any] = {}
         if effort:
             kwargs["output_config"] = {"effort": effort}
+        if temperature is not None:   # `messages.parse` has no sampling params; the body field is honoured
+            kwargs["extra_body"] = {"temperature": temperature}
         t0 = time.monotonic()
         try:
             msg = await self.client.messages.parse(

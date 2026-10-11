@@ -23,6 +23,7 @@ class Proposal(Value):
     anomalies: tuple[str, ...] = ()
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str
+    repairs: tuple[str, ...] = ()         # lenient rewrites applied to the pipeline text (domain/pipeline_json)
 
 
 class Judgement(Value):
@@ -78,6 +79,7 @@ class Episode(Record):
     stream: str = "stream"                 # stream | v | injection
     collections: tuple[str, ...] = ()      # the template's logical collections: a replay rebuilds the Question
     v_at: int | None = None                # V episodes: stream index of their V point
+    pipeline_repairs: tuple[str, ...] = ()  # the first attempt's pipeline text was repaired, not valid JSON
 
 
 # Fields a learner in an arm without an authority must never read (SPEC § 5: self_ref self-grades).

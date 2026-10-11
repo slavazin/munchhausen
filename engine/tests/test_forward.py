@@ -479,8 +479,8 @@ def test_retry_prompt_carries_the_authority_figure_and_phrasing(settings_offline
 
 
 def test_an_unparseable_pipeline_becomes_a_refused_stage() -> None:
-    assert proposer_party._pipeline("not json") == [{"$unparsed": "not json"}]
-    assert proposer_party._pipeline('{"$count": "n"}') == [{"$count": "n"}]
+    assert proposer_party._pipeline("not json") == ([{"$unparsed": "not json"}], ())
+    assert proposer_party._pipeline('{"$count": "n"}') == ([{"$count": "n"}], ())
 
 
 # --- the term vocabulary ---------------------------------------------------------------------------------

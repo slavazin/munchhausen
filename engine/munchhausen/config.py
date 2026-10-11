@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     pilot_control_min: float = 0.70     # … and control accuracy ≥ this
     kickoff_max_time_ms: int = 60_000   # source-profile aggregations in `kickoff-check` / `build-world`
     gold_check_combos: int = 12         # parameter combinations per template in the build-time gold checks
+    # Schema-summary fidelity (pilot gate): storage facts, never meanings. Values are listed only for the
+    # allowlisted `<collection>.<field path>`s, and only when the sample holds ≤ SCHEMA_VALUE_MAX distinct ones.
+    # tests/test_world.py refuses an allowlisted field that any quirk writes or defines.
+    schema_value_fields: list[str] = ["transactions.transactions.transaction_code"]
+    schema_value_max: int = 4
+    schema_note_lowercase: bool = True  # note string fields whose sampled values are all lowercase text
 
     # --- scoring -------------------------------------------------------------------------------------
     score_rel_tol: float = 1e-4
