@@ -56,6 +56,7 @@ REGISTRY: dict[str, dict[str, str]] = {
     "trace": {
         "null": "munchhausen.impl.sinks:NullTrace",
         "jsonl": "munchhausen.impl.sinks:JsonlTrace",
+        "raindrop": "munchhausen.impl.sinks:RaindropTrace",   # SPEC § 25.1; extra `trace` (raindrop-ai)
     },
     "signal_source": {
         "none": "munchhausen.impl.sinks:NoSignalSource",
@@ -84,6 +85,13 @@ NULL_IMPLEMENTATION: dict[str, str] = {
 REQUIRES_KEY: dict[str, dict[str, str]] = {
     "representation": {"voyage-4": "voyage_api_key", "voyage-4-lite": "voyage_api_key"},
     "reranker": {"rerank-3": "voyage_api_key", "rerank-3-lite": "voyage_api_key"},
+    "trace": {"raindrop": "raindrop_write_key"},
+}
+
+# Ports whose selection may name several implementations (joined by IMPL_LIST_SEP): the composition root
+# builds each and hands the list to this port's fan-out, which forwards every call to each. Write-only ports.
+FAN_OUT: dict[str, str] = {
+    "trace": "munchhausen.impl.sinks:TeeTrace",
 }
 
 
@@ -98,6 +106,16 @@ def resolve(port: str, name: str) -> Any:
     except KeyError as e:
         known = sorted(REGISTRY.get(port, {}))
         raise UnknownImplementation(f"no {port!r} implementation named {name!r}; known: {known}") from e
+    module, _, attr = path.partition(":")
+    return getattr(importlib.import_module(module), attr)
+
+
+def fan_out(port: str) -> Any:
+    """The fan-out class for `port`, called with the list of built implementations."""
+    try:
+        path = FAN_OUT[port]
+    except KeyError as e:
+        raise UnknownImplementation(f"port {port!r} takes one implementation; fan-out ports: {sorted(FAN_OUT)}") from e
     module, _, attr = path.partition(":")
     return getattr(importlib.import_module(module), attr)
 

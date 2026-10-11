@@ -262,8 +262,25 @@ class Settings(BaseSettings):
     # --- global port selections (per-arm overrides live in conf/arms.yaml) ---------------------------
     store_impl: str = "atlas"
     models_impl: str = "anthropic"
-    trace_impl: str = "null"
+    trace_impl: str = "null"            # a fan-out port (registry.FAN_OUT) takes several: "jsonl,raindrop"
     signal_source_impl: str = "none"
+    impl_list_sep: str = ","            # separates implementation names in one port selection
+
+    # --- Trace=raindrop (SPEC § 25.1): write-only, nothing on the learning path reads it ---------------
+    raindrop_debug: bool = True         # SDK debug logs (queued/sent); turn off once events are confirmed
+    raindrop_tracing: bool = False      # SDK OpenTelemetry auto-instrumentation of model clients
+    raindrop_episode_event: str = "episode"           # Raindrop event name of one forward pass
+    raindrop_adjudicator_user: str = "adjudicator"    # user_id of every non-episode event (track_ai)
+    raindrop_episode_properties: tuple[str, ...] = ("arm", "template", "idx", "stream", "run_id")
+    # trace event names (fnmatch patterns) sent as `track_ai`; every other event stays local
+    raindrop_events: tuple[str, ...] = ("fire_raised", "admission", "lifecycle.*", "backtest", "draft.written",
+                                        "draft.adjudicated", "injection.*")
+    raindrop_output_fields: tuple[str, ...] = ("verdict", "status", "disposition", "reason")  # first present
+    # payload keys (fnmatch, lower-cased) never sent: secrets and anything evaluation-side
+    raindrop_redact_keys: tuple[str, ...] = ("*key", "*_key_*", "*secret*", "*password*", "*token", "*uri*",
+                                             "*authorization*", "*gold*", "*truth*", "*credential*")
+    raindrop_redact_values: tuple[str, ...] = (r"mongodb(\+srv)?://\S+", r"\bsk-[A-Za-z0-9_-]{8,}")  # regexes
+    raindrop_redacted: str = "[redacted]"
 
     # --- paths ---------------------------------------------------------------------------------------
     conf_dir: Path = ENGINE_ROOT / "conf"

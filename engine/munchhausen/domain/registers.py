@@ -181,7 +181,7 @@ class PlantedMapping(Value):
 TRACE_EVENTS: frozenset[str] = frozenset({
     # forward pass and runner (S2)
     "episode", "consultation_set", "view_resolved", "guard_refusal", "proposal_failed", "episode_written",
-    "episode_failed", "fire_raised", "round_closed",
+    "episode_failed", "fire_raised", "round_closed", "episode_output",
     # shaping (S3)
     "observation.none", "observation.refused", "observation.written", "shape.formed", "shape.split",
     "shape.failed", "shape.windowed", "shape.refused", "bar.verdict", "bar.direction_read", "nominator.run",
@@ -195,6 +195,12 @@ TRACE_EVENTS: frozenset[str] = frozenset({
     # evidence (S5)
     "run_start", "run_finish",
 })
+
+
+EPISODE_OUTPUT = "episode_output"   # {episode_id, arm, idx, stream, pipeline, confidence}: before `finish`
+# `Trace.signal` names (SPEC § 25.1), emitted by the forward pass after the judgement
+SIGNAL_CORRECT = "correct"                            # value: the first attempt's score (bool)
+SIGNAL_AUTHORITY_CORRECTION = "authority_correction"  # value: the authority's figure; comment: its phrasing
 
 
 def catalogued(name: str) -> bool:

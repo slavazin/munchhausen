@@ -76,10 +76,12 @@ Trace (`TRACE_IMPL=jsonl`) → `var/runs/<run_id>/events.jsonl`, one line per ev
 `{at, run_id, name, arm, idx?, <ids>…}`. Write-only: nothing on the learning path reads it (SPEC § 21).
 The catalog (`domain/registers.TRACE_EVENTS`) is the names the surfaces emit; also catalogued by pattern:
 `<stage>.failed`, `lifecycle.<status>`, `injection.*`. Other names are written with `uncatalogued: true`.
+`TRACE_IMPL` may name several traces (`jsonl,raindrop`); each receives every call. `raindrop` (SPEC § 25.1)
+sends episodes, their signals and the events matching `RAINDROP_EVENTS`; nothing reads it back.
 
 | surface | names |
 |---|---|
-| forward pass, runner (S2) | `episode` (begin/finish), `consultation_set`, `view_resolved`, `guard_refusal` (carries `party`; read as `unknown` without it), `proposal_failed`, `episode_written`, `episode_failed`, `fire_raised`, `round_closed` |
+| forward pass, runner (S2) | `episode` (begin: ids, `template`, `persona`, `text`, `run_id`; finish: the answer), `consultation_set`, `view_resolved`, `guard_refusal` (carries `party`; read as `unknown` without it), `proposal_failed`, `episode_output` (`pipeline`, `confidence`), `episode_written`, `episode_failed`, `fire_raised`, `round_closed`; signals `correct` and `authority_correction` (value: the figure, comment: the phrasing) |
 | shaping (S3) | `observation.none`, `observation.refused`, `observation.written`, `shape.formed`, `shape.split`, `shape.failed`, `shape.windowed`, `shape.refused`, `bar.verdict`, `bar.direction_read`, `nominator.run`, `nomination.failed`, `draft.written`, `draft.renominated`, `draft.resumed`, `draft.adjudicated`, `draft.supersede_stripped` |
 | adjudication, lifecycle (S4) | `backward.round`, `backward.unavailable`, `adjudication`, `adjudication.layer`, `adjudication.failed`, `backtest`, `admission`, `admission.failed`, `lifecycle.superseded` / `.converged` / `.moot` / `.retired` / `.sweep`, `view.create`, `view.drop`, `tool_access.rewire`, `fire.dispose`, `owner.dispose`, `direct.merge`, `self_grade`, `lensfit.label` |
 | injection (S6) | `injection.*` (counted apart) |

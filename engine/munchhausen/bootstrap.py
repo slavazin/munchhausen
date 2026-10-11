@@ -22,12 +22,27 @@ from munchhausen.ports.store import Store
 log = logging.getLogger(__name__)
 
 
+def selected(name: str, s: Settings) -> list[str]:
+    """The implementation names in one port selection: one, or several joined by IMPL_LIST_SEP (fan-out ports),
+    in order and without repeats."""
+    return list(dict.fromkeys(n.strip() for n in name.split(s.impl_list_sep) if n.strip()))
+
+
 def build_port(port: str, name: str, s: Settings, store: Store | None = None) -> Any:
-    return registry.resolve(port, name).create(name, s, store)
+    """One implementation, or for a selection naming several, the port's fan-out over each (`registry.FAN_OUT`)."""
+    names = selected(name, s)
+    if len(names) == 1:
+        return registry.resolve(port, names[0]).create(names[0], s, store)
+    return registry.fan_out(port)([build_port(port, n, s, store) for n in names])
 
 
 def effective_name(port: str, name: str, s: Settings) -> str:
-    """`name`, or the port's null implementation when `name` needs a key that is not set."""
+    """`name`, or the port's null implementation when `name` needs a key that is not set (per name in a
+    fan-out selection)."""
+    names = selected(name, s)
+    if len(names) > 1:
+        return s.impl_list_sep.join(dict.fromkeys(effective_name(port, n, s) for n in names))
+    name = names[0] if names else name
     needs = registry.REQUIRES_KEY.get(port, {}).get(name)
     if needs is not None and getattr(s, needs, None) is None:
         return registry.NULL_IMPLEMENTATION[port]
@@ -42,8 +57,10 @@ class Harness:
     ports: dict[str, dict[str, Any]] = field(default_factory=dict)   # arm → port → instance
 
     def selection(self) -> dict[str, dict[str, str]]:
-        """Effective port selections per arm, written to `runs.ports` at run start (SPEC § 21)."""
-        return {a: {p: effective_name(p, n, self.settings) for p, n in spec.ports.items()}
+        """Effective port selections per arm, written to `runs.ports` at run start (SPEC § 21). The run-wide
+        trace is recorded in every arm's entry (each arm runs under it)."""
+        trace = effective_name("trace", self.settings.trace_impl, self.settings)
+        return {a: {**{p: effective_name(p, n, self.settings) for p, n in spec.ports.items()}, "trace": trace}
                 for a, spec in self.arms.items()}
 
     def port(self, arm: str, port: str) -> Any:
@@ -61,10 +78,14 @@ class Harness:
         return cache[port]
 
     def shared(self, port: str, name: str) -> Any:
-        """Run-wide ports (models, trace, signal source), one instance per run."""
+        """Run-wide ports (models, trace, signal source), one instance per run. A keyed implementation whose key
+        is absent falls back to the port's null implementation, as `port` does."""
         cache = self.ports.setdefault("_run", {})
         if port not in cache:
-            cache[port] = build_port(port, name, self.settings, self.store)
+            effective = effective_name(port, name, self.settings)
+            if effective != self.settings.impl_list_sep.join(selected(name, self.settings)):
+                log.warning("[run] port %s: %r needs a key that is not set; using %r", port, name, effective)
+            cache[port] = build_port(port, effective, self.settings, self.store)
         return cache[port]
 
     def world(self) -> Any:
