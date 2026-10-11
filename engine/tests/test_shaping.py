@@ -872,6 +872,7 @@ def test_floor_draft_undoes_a_fold_that_leaves_fewer_than_the_floor_templates() 
     rows = [r for r in rows if r.template != "t3"]       # t1, t2, t4: the fold would leave 2 < 3
     p, _, drafts, trace, models = build(GAP, Verdict.ADMIT, rows, holdout=1,
                                         models=Warranting(DecisionKind.FLOOR))
+    p.min_templates_floor = 3       # SPEC § 7.3's floor bar; the run's default is 2 (approved departure)
     (did,) = run(p.run("r", "a", 0)).drafts
     d = drafts.rows[did]
     assert d.holdout_templates == () and d.warrant.templates == 3 and "o7" in d.source_observation_ids

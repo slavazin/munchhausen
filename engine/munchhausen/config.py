@@ -139,7 +139,8 @@ class Settings(BaseSettings):
     embed_mask: Literal["none", "surfaces"] = "none"
     bar_min_obs: int = 2
     bar_min_templates: int = 2
-    bar_min_templates_floor: int = 3
+    bar_min_templates_floor: int = 2    # departure from SPEC § 7.3 (floor bar 3), approved 2026-10-11:
+    #                                     a floor needs 2 templates seen + 1 held out by the fold
     bar_min_gap: float = 0.10           # E4 direction read: miss rate inside the shape's presentation − outside
     bar_min_matched: int = 10           # episodes the presentation must match before the gap is read
     neighbour_k: int = 5                # admitted neighbours shown to the nominator and routed at L2

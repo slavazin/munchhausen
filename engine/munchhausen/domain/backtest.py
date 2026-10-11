@@ -16,6 +16,7 @@ class BacktestVerdict(StrEnum):
     ADMIT = "admit"
     REFUSE = "refuse"
     INSUFFICIENT = "insufficient"   # fewer than BACKTEST_MIN_N scored pairs: the read did not happen (L4 holds)
+    AWAITING_HELDOUT = "awaiting_heldout"   # no held-out fold, and only the held-out fix is missing (L4 holds)
 
 
 class BacktestSample(Value):
@@ -75,6 +76,7 @@ class Backtest(Record):
         at_idx: int | None = None,
         holdout_reserved: int = 0,
         holdout_available: int | None = None,
+        holdout_fold: bool = True,
     ) -> Backtest:
         """Admit on `fixed ≥ min ∧ fixed − broken ≥ min ∧ fixed_heldout ≥ min ∧ broken ≤ max`; fewer than
         `min_n` scored pairs is INSUFFICIENT (the backtest could not read, so it neither admits nor refuses)."""
@@ -88,6 +90,16 @@ class Backtest(Record):
             and broken <= thresholds.max_broken
         )
         verdict = BacktestVerdict.ADMIT if admit else BacktestVerdict.REFUSE
+        clears_but_heldout = (
+            len(fixed) >= thresholds.min_fixed
+            and len(fixed) - broken >= thresholds.min_fixed
+            and broken <= thresholds.max_broken
+            and fixed_heldout < thresholds.min_fixed_heldout
+        )
+        if not holdout_fold and clears_but_heldout:
+            # a shape too narrow to fold (2 templates) cannot show a held-out fix yet: hold it to accrue a
+            # template rather than refuse it and spend its evidence (approved departure, 2026-10-11)
+            verdict = BacktestVerdict.AWAITING_HELDOUT
         if len(sampled) < thresholds.min_n:
             verdict = BacktestVerdict.INSUFFICIENT
         return cls(

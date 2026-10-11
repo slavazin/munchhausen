@@ -160,7 +160,8 @@ def test_poisoned_draft_is_refused_zero_fixed_two_broken() -> None:
 
 
 def test_case_leak_without_heldout_fix_is_refused() -> None:
-    """Fixes only on the source templates: fixed ≥ 2 but fixed_heldout = 0."""
+    """Fixes only on the source templates: fixed ≥ 2 but fixed_heldout = 0. With a held-out fold it refuses;
+    without one (a 2-template shape) it waits for a template (`awaiting_heldout`)."""
     w = World()
     for e in list(w.store.st.episodes.values()):
         if e.template in ("t3", "t4") and not e.correct:
@@ -168,6 +169,9 @@ def test_case_leak_without_heldout_fix_is_refused() -> None:
             w.right[e.question_id] = e.confirmed_figure + 1.0   # the draft's "right" misses the held-out figure
     d = draft("d-leak", "Active customers hold the RULE status set.", w.sources)
     bt = run(w.backtester().run(d, w.ctx())).backtest
+    assert bt.fixed >= 2 and bt.fixed_heldout == 0 and bt.verdict.value == "awaiting_heldout"
+    folded = d.model_copy(update={"id": "d-leak-fold", "holdout_templates": ("t3",)})
+    bt = run(w.backtester().run(folded, w.ctx())).backtest
     assert bt.fixed >= 2 and bt.fixed_heldout == 0 and bt.verdict.value == "refuse"
 
 

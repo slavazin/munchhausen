@@ -214,8 +214,9 @@ class L4Backtest:
     """The dispositive layer. Delegates to `learn.backtest.Backtester` (paired replay, § 7.4). Admits on
     `fixed ≥ min ∧ fixed − broken ≥ min ∧ fixed_heldout ≥ min ∧ broken ≤ max`; refuses otherwise, always with
     the backtest id. A read with fewer than BACKTEST_MIN_N scored pairs HOLDs (`reason: insufficient`): a
-    backtest that could not score never refuses. The outcome's `label` (1 admitted, 0 refused, None held) is
-    the lens fit's label (§ 9); the fit itself is cut."""
+    backtest that could not score never refuses. A draft with no held-out fold (a 2-template shape) whose
+    read clears everything but the held-out fix HOLDs (`reason: awaiting_heldout_template`). The outcome's
+    `label` (1 admitted, 0 refused, None held) is the lens fit's label (§ 9); the fit itself is cut."""
 
     backtester: Backtester
     name: str = "L4"
@@ -226,6 +227,11 @@ class L4Backtest:
         if run.insufficient:
             return LayerOutcome(layer=self.name, role=self.role, verdict=Verdict.HOLD,
                                 detail={**run.detail(), "reason": "insufficient", "label": None})
+        if run.backtest.verdict is BacktestVerdict.AWAITING_HELDOUT:
+            # no held-out fold and only the held-out fix missing: hold, so the evidence returns `open` and a
+            # later shape with a third template re-nominates it with a fold (the full rule then applies)
+            return LayerOutcome(layer=self.name, role=self.role, verdict=Verdict.HOLD,
+                                detail={**run.detail(), "reason": "awaiting_heldout_template", "label": None})
         admit = run.backtest.verdict is BacktestVerdict.ADMIT
         return LayerOutcome(layer=self.name, role=self.role, verdict=Verdict.ADMIT if admit else Verdict.REFUSE,
                             detail={**run.detail(), "label": int(admit)})
