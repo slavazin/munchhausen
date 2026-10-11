@@ -57,7 +57,10 @@ class AtlasDecisions:
         """`$graphLookup` over `latches.edges` (SPEC § 17 pane 5)."""
         pipeline = [
             {"$match": {"_id": decision_id}},
-            {"$graphLookup": {"from": C.DECISIONS.value, "startWith": "$latches.edges",
+            # `$latches.edges` over an array of latch subdocuments is an array of arrays; flatten it first
+            {"$graphLookup": {"from": C.DECISIONS.value,
+                              "startWith": {"$reduce": {"input": "$latches.edges", "initialValue": [],
+                                                        "in": {"$concatArrays": ["$$value", "$$this"]}}},
                               "connectFromField": "latches.edges", "connectToField": "_id", "as": "chain"}},
         ]
         docs = await (await self._c.aggregate(pipeline)).to_list()
