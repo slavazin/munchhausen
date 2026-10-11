@@ -59,3 +59,12 @@ class LensPanel(Protocol):
 
     async def score(self, draft: Draft, sources: Sequence[Observation],
                     neighbours: Sequence[Decision]) -> dict[str, float]: ...
+
+
+@runtime_checkable
+class Adjudicator(Protocol):
+    """Where a draft goes after nomination: the arm's curator, then the lifecycle on admit, then the
+    draft's and its source observations' dispositions. Built by the composition root (`bootstrap_learn`);
+    the episodic pass and the injection control hand drafts here and never call the curator directly."""
+
+    async def adjudicate(self, draft: Draft, ctx: CurationContext) -> list[LayerOutcome]: ...

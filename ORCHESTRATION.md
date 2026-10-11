@@ -22,14 +22,18 @@ at the end of the relevant class or section, never reordering or renaming). The 
 | S2 forward + runtime sandbox | M2 | `agent/**`, `loop/episode.py`, `loop/runner.py`, `loop/residuals.py`, `impl/parties/proposer.py`, `impl/representation.py`, `impl/reranker.py`, `impl/similarity.py`, `bootstrap.py`, `commands/forward.py`, `domain/pipeline_guard.py`, `tests/test_forward*.py`, `tests/test_sandbox*.py` | `config.py`, `ports/store.py`, `store/repositories.py`, `store/atlas.py`, `ports/registry.py` |
 | S3 shaping | M3a | `learn/observe.py`, `learn/episodic.py`, `learn/nominate.py`, `impl/parties/observer.py`, `impl/parties/nominator.py`, `impl/grouper.py`, `lint_language.py`, `tests/test_shaping*.py` | `config.py`, `ports/store.py`, `store/repositories.py`, `ports/registry.py` |
 | S4 adjudication | M3b | `learn/layers.py`, `learn/backtest.py`, `learn/lifecycle.py`, `learn/curators.py`, `learn/direct.py`, `learn/adjudicate.py`, `impl/parties/lesson.py`, `impl/parties/self_grade.py`, `impl/lens_panel.py`, `bootstrap_learn.py`, `commands/learn.py`, `tests/test_adjudication*.py` | `config.py`, `ports/store.py`, `store/repositories.py`, `store/decisions.py`, `ports/registry.py`, `domain/admission.py` |
-| S5 telemetry + evidence | M4 metrics | `metrics/**`, `impl/models_anthropic.py` (shared call path), `impl/sinks.py`, `impl/parties/planted_map.py`, `conf/forecasts.yaml`, `commands/telemetry.py`, `corpus/EVIDENCE.md`, `tests/test_telemetry*.py` | `config.py`, `ports/store.py`, `store/repositories.py`, `domain/registers.py`, `ports/registry.py` |
-| S6 viewer | M4 viewer | `viewer/**`, `loop/inject.py`, `commands/viewer.py`, `tests/test_viewer*.py` | `config.py`, `ports/store.py`, `store/repositories.py` |
+| S5 telemetry + evidence | M4 metrics | `metrics/**`, `evidence.py`, `impl/models_anthropic.py` (shared call path), `impl/sinks.py`, `impl/parties/planted_map.py`, `conf/forecasts.yaml`, `commands/telemetry.py`, `corpus/EVIDENCE.md`, `tests/test_telemetry*.py` | `config.py`, `ports/store.py`, `store/repositories.py`, `domain/registers.py`, `ports/registry.py` |
+| S6 viewer | M4 viewer | `viewer/**`, `loop/inject.py`, `store/read_models.py` (new), `commands/viewer.py`, `tests/test_viewer*.py` | `config.py`, `ports/store.py`, `store/repositories.py` |
 
 Seams laid by the orchestrator (commit "orchestration seams"):
 - `impl/parties/<party>.py`: one module per LLM party, `async def run(llm: LLM, settings, ...)`. `AnthropicModels`
   owns only the shared call path (`parse`, `client`, `record_call`) and delegates each port method.
 - `bootstrap_learn.backward_for(h, arm) -> RoundHook`: S4 builds it; S2's `bootstrap` calls it for `on_round_close`.
 - `commands/<surface>.py: register(app)`: CLI commands per surface; `cli.py` is not edited.
+- `ports/curation.Adjudicator.adjudicate(draft, ctx)`: S4 implements (`learn/adjudicate.py`); S3's episodic pass and
+  S6's injection hand drafts to it.
+- `evidence.start_run(h)` / `evidence.close_round(h, arm, round, idx_range)`: S5 implements; S2's `run` command
+  and runner call them (start before the first episode; close after the backward hook of each round).
 
 ## Sandbox
 
