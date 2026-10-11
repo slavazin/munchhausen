@@ -84,3 +84,6 @@ class Draft(EntryContract, Record):
     supersedes: str | None = None
     status: DraftStatus = DraftStatus.PENDING
     round: int
+    # Every episode id the nominator was shown: the shape's own episodes plus the episodes behind the
+    # neighbours' residuals. The backtest population excludes them, so the held-out read stays held out.
+    nominator_seen_episode_ids: tuple[str, ...] = ()

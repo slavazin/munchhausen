@@ -69,7 +69,18 @@ class ObservationWire(BaseModel):
     notes: list[NoteWire]
 
 
-def render(episode: Episode) -> str:
+def short_error(error: str | None, limit: int) -> str | None:
+    """The driver's code and errmsg only: pymongo appends the full error document after ", full error:"."""
+    if error is None:
+        return None
+    return error.split(", full error:")[0][:limit]
+
+
+def norm(term: str) -> str:
+    return " ".join(term.lower().split())
+
+
+def render(episode: Episode, settings: Settings) -> str:
     """The episode as the observer reads it: the question, the attempt, the gap. No other record."""
     view = {
         "question": episode.text,
@@ -80,7 +91,7 @@ def render(episode: Episode) -> str:
         "pipeline": episode.pipeline,
         "answer_path": episode.answer_path,
         "answer": episode.answer,
-        "execution_error": episode.error,
+        "execution_error": short_error(episode.error, settings.error_prompt_chars),
         "expected_figure": episode.figure,
         "stakeholder_phrasing": episode.phrasing,
     }
@@ -88,13 +99,15 @@ def render(episode: Episode) -> str:
 
 
 def to_note(w: NoteWire, episode: Episode) -> ObservationNote:
-    presented = set(episode.terms)
-    terms = [t.strip().lower() for t in w.terms if t.strip()]
+    presented = {norm(t) for t in episode.terms}
+    terms = [norm(t) for t in w.terms if t.strip()]
     if presented:   # keep the shared vocabulary: terms the question did not present fall back to its own
         terms = [t for t in terms if t in presented] or sorted(presented)
+    known = {episode.collection, *episode.collections}
+    collection = w.collection if w.collection in known else episode.collection
     return ObservationNote(
         cls=ObservationClass(w.cls), noticed=w.noticed.strip(),
-        surfaces=Surfaces(terms=tuple(dict.fromkeys(terms)), collection=w.collection or episode.collection,
+        surfaces=Surfaces(terms=tuple(dict.fromkeys(terms)), collection=collection,
                           fields=tuple(w.fields), phrasing=episode.phrasing),
         signature_guess=w.signature_guess,
         re_check_when=ReCheckWhen(terms=tuple(w.re_check_terms)) if w.re_check_terms else None,
@@ -103,5 +116,6 @@ def to_note(w: NoteWire, episode: Episode) -> ObservationNote:
 
 async def run(llm: LLM, settings: Settings, episode: Episode) -> list[ObservationNote]:
     wire = await llm.parse(stage="observe", arm=episode.arm, model=settings.observer_model, system=SYSTEM,
-                           user=render(episode), wire=ObservationWire, max_tokens=settings.observer_max_tokens)
+                           user=render(episode, settings), wire=ObservationWire,
+                           max_tokens=settings.observer_max_tokens)
     return [to_note(w, episode) for w in wire.notes]

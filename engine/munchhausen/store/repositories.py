@@ -103,6 +103,27 @@ class AtlasEpisodes(_Ledger[Episode]):
         hits, misses = (docs[0]["hits"], docs[0]["misses"]) if docs else ([], [])
         return [Episode.model_validate(d) for d in balance(hits, misses, n)]
 
+    async def direction_read_window(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int,
+                                    after_idx: int | None = None, last_n: int | None = None) -> DirectionRead:
+        lo = after_idx if after_idx is not None else 0
+        if last_n is not None:
+            cur = self._c.find({"run_id": run_id, "arm": arm, "stream": "stream",
+                                "idx": {"$gte": lo, "$lt": before_idx}, **inside}, {"idx": 1}
+                               ).sort("idx", -1).skip(max(0, last_n - 1)).limit(1)
+            nth = [d async for d in cur]
+            if nth:
+                lo = max(lo, int(nth[0]["idx"]))
+        pipeline: Pipeline = [
+            {"$match": {"run_id": run_id, "arm": arm, "stream": "stream", "idx": {"$gte": lo, "$lt": before_idx}}},
+            {"$facet": {side: [{"$match": f}, {"$group": {"_id": None, "n": {"$sum": 1},
+                                                          "misses": {"$sum": {"$cond": ["$correct", 0, 1]}}}}]
+                        for side, f in (("in", inside), ("out", {"$nor": [inside]}))}},
+        ]
+        docs = await (await self._c.aggregate(pipeline)).to_list()
+        row = {side: (docs[0][side][0] if docs and docs[0][side] else {"n": 0, "misses": 0}) for side in ("in", "out")}
+        return DirectionRead(misses_in=row["in"]["misses"], n_in=row["in"]["n"],
+                             misses_out=row["out"]["misses"], n_out=row["out"]["n"])
+
 
 class AtlasObservations(_Ledger[Observation]):
     model = Observation
@@ -142,6 +163,9 @@ class AtlasDrafts(_Ledger[Draft]):
     async def held(self, run_id: str, arm: str) -> list[Draft]:
         cur = self._c.find({"run_id": run_id, "arm": arm, "status": DraftStatus.HELD.value})
         return [Draft.model_validate(d) async for d in cur]
+
+    async def set_status(self, draft_id: str, status: DraftStatus) -> None:
+        await self._c.update_one({"_id": draft_id}, {"$set": {"status": status.value}})
 
 
 class AtlasBacktests(_Ledger[Backtest]):
