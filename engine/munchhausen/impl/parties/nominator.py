@@ -444,7 +444,8 @@ def submission_problems(w: DraftWire, s: Session) -> list[str]:
     if out:
         return out
     entry = build_entry(w, s)
-    return entry.l0_violations(s.source_figures()) + lint_draft_language(entry, s.inp.vocabulary, w.new_terms)
+    return (entry.l0_violations(s.source_figures(), s.settings.leak_min_abs)
+            + lint_draft_language(entry, s.inp.vocabulary, w.new_terms))
 
 
 # --- prompt ----------------------------------------------------------------------------------------

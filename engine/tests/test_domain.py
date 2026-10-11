@@ -143,3 +143,11 @@ def test_scoring() -> None:
     assert not matches(1204.0, 1300.0, rel_tol=1e-4)
     assert matches(["AAPL", "msft"], ["msft", "aapl"], rel_tol=0)
     assert not matches(None, 1.0, rel_tol=1e-4)
+
+
+def test_leaked_figures_ignores_dates_and_small_figures() -> None:
+    from munchhausen.domain.decision import leaked_figures
+
+    assert leaked_figures("born on or after 1970-01-01T00:00:00Z", [1.0]) == []
+    assert leaked_figures("codes 2 and 7 count", [2.0], min_abs=10.0) == []
+    assert leaked_figures("the total is 1,204", [1204.0], min_abs=10.0) == ["1204"]

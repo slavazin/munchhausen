@@ -36,12 +36,13 @@ class L0Shape:
 
     terms: TermRepository
     world: DocumentReader | None = None
+    leak_min_abs: float = 0.0     # LEAK_MIN_ABS: source figures this small never count as a leak
     name: str = "L0"
     role: LayerRole | None = None
 
     async def check(self, draft: Draft, ctx: CurationContext) -> LayerOutcome:
         figures = [x for o in ctx.sources for x in (o.answer, o.figure) if isinstance(x, (int, float))]
-        problems = draft.l0_violations(figures)
+        problems = draft.l0_violations(figures, self.leak_min_abs)
         known = {t.term.lower() for t in await self.terms.all(run_id=ctx.run_id)} | escaped_terms(draft.new_terms)
         unknown = sorted({t.lower() for t in draft.hook.fires_when.terms} - known)
         if unknown:

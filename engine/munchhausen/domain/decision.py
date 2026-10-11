@@ -129,7 +129,7 @@ class EntryContract(Value):
 
     # --- the pure half of L0 (SPEC § 10.2 "L0 additions") ------------------------------------------
 
-    def l0_violations(self, source_figures: Iterable[float]) -> list[str]:
+    def l0_violations(self, source_figures: Iterable[float], leak_min_abs: float = 0.0) -> list[str]:
         """Structural refusals that need no store. Anchor resolution and vocabulary checks need the
         store and run in the L0 layer (`learn/layers.py`)."""
         out: list[str] = []
@@ -154,7 +154,7 @@ class EntryContract(Value):
                 check([{"$match": floor.match}], targets=())
             except PipelineRefused as e:
                 out.append(f"floor match refused by the sandbox: {e}")
-        leaked = leaked_figures(self.payload, source_figures)
+        leaked = leaked_figures(self.payload, source_figures, leak_min_abs)
         if leaked:
             out.append(f"payload contains a source figure: {leaked}")
         return out
@@ -183,11 +183,15 @@ def evidence_state(open_fire_roles: Iterable[tuple[FireRole, FireDisposition]]) 
     return EvidenceState.CONTESTED if contested else EvidenceState.CLEAR
 
 
-def leaked_figures(text: str, source_figures: Iterable[float]) -> list[str]:
-    """Numbers in `text` equal to a source answer or figure: the mechanical floor under `case_leak`."""
-    return sorted(_numbers_in(text) & {_norm(f) for f in source_figures})
+def leaked_figures(text: str, source_figures: Iterable[float], min_abs: float = 0.0) -> list[str]:
+    """Numbers in `text` equal to a source answer or figure: the mechanical floor under `case_leak`.
+    Digits inside ISO dates and times never count (`1970-01-01` is not a 1); figures with |x| < `min_abs`
+    are ignored (the caller passes LEAK_MIN_ABS)."""
+    figures = {_norm(f) for f in source_figures if abs(float(f)) >= min_abs}
+    return sorted(_numbers_in(_DATE.sub(" ", text)) & figures)
 
 
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?")
 _NUM = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
 
 

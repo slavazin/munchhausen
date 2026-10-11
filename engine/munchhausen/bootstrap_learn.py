@@ -111,7 +111,7 @@ def curator_for(h: Any, arm: str) -> Any:
         s, store, spec = h.settings, h.store, h.arms[arm]
         layers: dict[str, Callable[[], Any]] = {
             "l0": ((lambda: LessonShape()) if spec.write_path in LESSON_PATHS
-                   else (lambda: L0Shape(store.terms, world=store.world()))),
+                   else (lambda: L0Shape(store.terms, world=store.world(), leak_min_abs=s.leak_min_abs))),
             "l1": lambda: L1Bar(min_templates=s.bar_min_templates, min_templates_floor=s.bar_min_templates_floor),
             "l2": lambda: L2Neighbours(threshold=s.neighbour_rerank, decisions=store.decisions, fires=store.fires,
                                        route_contested=s.l2_route_contested),
