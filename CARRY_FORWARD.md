@@ -149,6 +149,16 @@ in `lifecycle.ungated` (exported `docs/evidence/run-a` predates both injections)
 +0.325 [+0.175, +0.475], ungated − frozen +0.550 [+0.425, +0.675], governed − ungated −0.225 [−0.350, −0.100];
 Run B +0.300 / +0.550 / −0.250 [−0.375, −0.100]. Scratchpad `vset.py` has the per-stratum table.
 
+**Final V read on end-of-run stores (16:35; scratchpad `final_v.py`, `final_v_ungated.py`, `vfinal_table.py`):**
+sealed V set through each arm's `ArmRunner._attempts` at at_idx 600, V index block k=4; injection-sourced
+decisions dropped in-process (store untouched). **The injected lie had superseded ungated's true Q1 rule
+`D-6b50b38199` at idx 600**, so run-a ungated's 600 read (Q1 0/9) is invalid; its end-of-run number is the
+in-memory reconstruction at at_idx 599 (k=5: lie dropped, `D-6b50b38199` restored), and at_idx 598 (k=6) is the
+store with the lie live. Totals /40: Run A frozen 14, self_ref 13, naive 19, ungated 36, governed 29, ungated
+with the lie 29 (Q1 7/9 → 0/9); governed − ungated −0.175 [−0.300, −0.050]; governed − frozen +0.375 [+0.225,
++0.525]. Run B frozen 14, naive 15, ungated 36, governed 25; governed − ungated −0.275 [−0.425, −0.125].
+LLM-sampling noise is visible (ungated Q1 8/9 @525 → 7/9 @599 with the same rule).
+
 **Run B** (adversarial authority) launched 15:17, DONE 15:54: `RUN_ID=run-b`, snapshot `60086e4` (`munch-run-b`),
 `AUTHORITY_POISON_RATE=0.20`, `CONF_DIR=<munch-run-b>/engine/conf/run-b` (forecasts F1–F7 registered; F2 = governed
 admits 0 N1-derived, naive and ungated ≥1; F7 = governed − ungated on controls after round 10), arms frozen, naive,
