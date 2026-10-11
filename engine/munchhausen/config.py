@@ -111,6 +111,16 @@ class Settings(BaseSettings):
     not_this_min: int = 3
     fusion: Literal["rank", "score"] = "rank"
 
+    # --- shaping (S3: observer, episodic pass, nominator) ---------------------------------------------
+    observer_max_tokens: int = 4000
+    nominator_max_tokens: int = 16000
+    nominator_max_tool_turns: int = 12      # model turns in the nominator's world-tool loop before it must submit
+    nominator_tool_max_rows: int = 50       # rows one world-tool call returns to the nominator ($limit appended)
+    nominator_tool_max_time_ms: int = 5000  # maxTimeMS per world-tool aggregate
+    nominator_tool_result_chars: int = 6000 # characters of one tool result shown to the nominator
+    nominator_residual_window: int = 10     # recent consultations read per neighbour for its residuals
+    nominator_min_options: int = 2          # options rows: >= 1 prior (rejected) + the chosen definition
+
     # --- second-order loop ---------------------------------------------------------------------------
     label_horizon: int = 150
     lensfit_min_labels: int = 20

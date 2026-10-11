@@ -34,6 +34,7 @@ REGISTRY: dict[str, dict[str, str]] = {
     },
     "grouper": {
         "agglomerative": "munchhausen.impl.grouper:AgglomerativeGrouper",
+        "signature-buckets": "munchhausen.impl.grouper:SignatureBucketGrouper",   # E2; works with no embedder
     },
     "lens_panel": {
         "jev": "munchhausen.impl.lens_panel:JevLensPanel",

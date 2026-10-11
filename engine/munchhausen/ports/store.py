@@ -84,6 +84,10 @@ class ObservationRepository(Protocol):
 
     async def dispose(self, ids: Sequence[str], disposition: ObservationDisposition, by: str) -> None: ...
 
+    async def get(self, observation_id: str) -> Observation | None:
+        """One observation by id (the observer's idempotence check). Added by S3 (shaping)."""
+        ...
+
 
 @runtime_checkable
 class DecisionRepository(Protocol):
