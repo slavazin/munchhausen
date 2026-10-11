@@ -8,6 +8,69 @@ holds. Exception, once: the review changed the design itself, so the SPEC was am
 shape (§ 0, 4.2–4.4, 5, 6.3, 7.1–7.4, 9, 10.1, 11–14, 16, 18, 21, 24.1). M0 resolutions 9 and 16 below are
 now also stated in the SPEC.
 
+**Amended 2026-10-11 13:30 PDT after the orchestrated M1–M4 build (§ 0 below).** § 0 supersedes § 1, § 5 and
+§ 6 where they differ; § 3/§ 3a still bind.
+
+---
+
+## 0. Orchestrated build (12:45–13:30): state, binding decisions, open items
+
+Six surface agents (S1 world, S2 forward + runtime sandbox, S3 shaping, S4 adjudication, S5 telemetry/evidence,
+S6 viewer/injection), each in its own worktree with file ownership (`ORCHESTRATION.md`), then one adversarial
+review per surface and one fix round, plus a pilot-gate agent. Everything is merged on `m0-scaffold` (= branch
+`integration`, `0158818`). 359 tests pass, ruff clean. Error patterns: `corpus/LESSONS.md` (branch `lessons`).
+
+**State.** M1 world, M2 forward pass, M3 backward pass, M4 viewer + evidence report are built. Atlas:
+`setup` re-applied after the schema additions; `world` rebuilt (pack hash in `runs`); V set sealed and
+stratified (control 14, Q1 9, P1 5, Q3 4, Q5 4, Q6 4). Quirks built: Q1 (+D1), Q3, Q5, Q6, P1, N1. Not built:
+Q2, Q4/D2, Q7, Q8 (D2 is therefore cut). Pilot gate (SPEC § 12) reads in range on `claude-haiku-5-5`: controls
+17/17, quirk-bearing 0/23 (n=40); n=120: 37/37, 2/83.
+
+**Keys.** `.env` names are aliased in `config.py`: `anthropic_munch_key` (org API key) + `anthropic_workspace_key`
+(→ `ANTHROPIC_WORKSPACE_ID` header) = auth mode `api_key_workspace`, every model served; `claude_oauth_key` is
+the fallback (serves only haiku-4-5); `voyage_key`, `typesafe_key`. Per-role Atlas users still absent →
+`isolation: convention`.
+
+Binding decisions made in this build (don't relitigate):
+1. **Proposer = `claude-haiku-5-5`** (SPEC § 12 hedge: haiku-4-5 failed controls at 0.65 after mechanical
+   fixes). Haiku 5.5 refuses `temperature` (400), so `PROPOSER_TEMPERATURE` defaults to unset; replay noise is
+   handled by rule 3. SPEC § 3/§ 16 still say haiku-4-5; the config holds.
+2. **Rounds are half-open `[lo, hi)`** everywhere (runner, episodic pass, round record, backward hook).
+3. **Admission (SPEC § 7.4 amended):** a fix counts only when the with-draft replay recorded the draft
+   `applied`; admit needs `fixed ≥ min ∧ fixed_heldout ≥ min ∧ broken ≤ max ∧ fixed − broken ≥ BACKTEST_MIN_FIXED`.
+   Fewer than `BACKTEST_MIN_N` scored pairs → verdict `insufficient`, L4 HOLD (never a refuse).
+4. **Backtest population** excludes the warrant's and context's sources, `Draft.nominator_seen_episode_ids`, and
+   any episode whose question id or text equals one of theirs; a non-supersede draft reads the last
+   `BACKTEST_RECENT` episodes; misses whose terms meet the hook are sampled first.
+5. **Nominator sees neighbour residuals as `{signature_match, attributable, direction}` only**;
+   `NOMINATOR_RESIDUAL_WINDOW` 4.
+6. **Direction read is windowed**: from a contested neighbour's earliest open dispositive fire, else the last
+   `DIRECTION_WINDOW` (40) matched episodes. Coherence guard also keeps one-persona/one-direction and
+   one-collection/one-direction clusters (P1 and Q3 shapes survive).
+7. **Retirement counts dispositive fires only**; corroborating fires never settle anything (§ 6.3).
+8. **Observation dispositions belong to the episodic pass** (shaped → spent; hold → open); the adjudicator sets
+   draft status only.
+9. **Index namespaces:** stream `idx ≥ 0`; V `idx = -(1 + k·V_SIZE + j)` with `v_at`; injection
+   `idx ≤ INJECT_IDX_BASE` (−1,000,000), `stream="injection"`, `Draft.source="injection"`. Injected
+   observations are spent on every exit and excluded from the organic pass (`open_for_pass(exclude_via=…)`);
+   owner-admit refuses an all-injection draft.
+10. **Runtime sandbox:** every world read goes through `GuardedReader` (`domain/pipeline_guard.py`); floor
+    matches are guard-checked at L0 and before `create_view`; `$lookup/$graphLookup/$unionWith` targets are
+    rewritten through `view_map`; gold reads `world_evaluation()` (unguarded, evaluator side only).
+11. **Terms are run-scoped** (`Term.runs[run] = admitted_at_idx`); hook terms are case/space-normalized.
+12. **Naive merge = converge successor** (tombstone per merge); readings exclude `converged`/`retired` from drift
+    resolution; F4 needs a real supersession with a successor.
+13. **Evidence:** proxy readings read `unread (proxy)`; paired readings drop errored or mismatched pairs;
+    resumes append `runs.resumes[]` with every moved knob/sha/prompt/port/pack; tokens come from spend (null,
+    never 0); event catalog = the names surfaces emit (`corpus/EVIDENCE.md`).
+
+Open / next:
+- Smoke run `smoke-1` (all arms, 60 episodes) → then **Run A** (`RUN_ID=run-a`, `RUN_LENGTH` 900, D1 at 300).
+- Lens panel `jev` hedges heavily (p≈0.4–0.5): keep `LENS_MODE=record`.
+- Injection spend for observer/nominator/replay calls is still tagged with their own stages.
+- Cost per governed draft ≈ 16 proposer replays + 8 reranks + 15 Jev calls; levers `BACKTEST_N`, `LENS_PHRASINGS`.
+- `lensfit` (§ 9) and Raindrop remain cut.
+
 ---
 
 ## 1. Where things stand
