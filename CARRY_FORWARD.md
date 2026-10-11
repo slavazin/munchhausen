@@ -1,8 +1,12 @@
 # Carry-forward — session state for the next implementer
 
-Written 2026-10-11 11:53 PDT, after M0. Read this, then `CLAUDE.md`, then the SPEC sections named under
-**Next**. `SPEC.md` is the design and holds wherever this file is silent. Where this file records a
-decision that departs from or resolves the spec, this file holds — the spec is not edited to match.
+Written 2026-10-11 11:53 PDT, after M0. Amended 2026-10-11 12:21 PDT after the M0 adversarial review
+(`<workspace>/type-gce/REVIEW.md`, against `4764f2f`); § 3a lists what changed. Read this,
+then `CLAUDE.md`, then the SPEC sections named under **Next**. `SPEC.md` is the design and holds wherever
+this file is silent. Where this file records a decision that departs from or resolves the spec, this file
+holds. Exception, once: the review changed the design itself, so the SPEC was amended to state the new
+shape (§ 0, 4.2–4.4, 5, 6.3, 7.1–7.4, 9, 10.1, 11–14, 16, 18, 21, 24.1). M0 resolutions 9 and 16 below are
+now also stated in the SPEC.
 
 ---
 
@@ -11,16 +15,19 @@ decision that departs from or resolves the spec, this file holds — the spec is
 | Milestone (SPEC § 13) | Slot | State |
 |---|---|---|
 | M0 scaffold + schema lock | 10:30–11:00 | **done** (late, ~11:50). Commit `52cde25` on branch `m0-scaffold` |
+| M0 review fixes | — | **done** (12:21, uncommitted) on `m0-scaffold`, after `4764f2f`: § 3a |
 | M1 world | 11:00–12:00 | not started — **next** |
 | M2 forward pass | 12:00–12:45 | forward pass orchestration written (`loop/episode.py`); collaborators stubbed |
 | M3 backward pass | 12:45–14:00 | layer/curator/lifecycle skeletons; L0, L1, curators, admission plan done |
 | M4–M6 | 14:00– | stubs only |
 
-Schedule is ~50 min behind. Cut order (SPEC § 13): Part II post-event rows → § 9 → context policy → D2 →
-`self_ref` → Raindrop.
+Schedule is ~80 min behind (M1 not started at 12:21). Cut order (SPEC § 13, amended): Part II post-event rows → § 9 → `self_ref` →
+context policy → D2 → Raindrop. If the day runs short, build the minimum configuration (§ 5 below).
 
-**Verification:** `uv run pytest` → 72 passed, 1 skipped (numpy similarity loader, M2).
+**Verification:** `uv run pytest` → 85 passed, 1 skipped (numpy similarity loader, M2).
 `uv run ruff check engine viewer` → clean.
+**Atlas validators are stale:** `backtests` and `episodes` gained fields. Re-run `uv run munchhausen setup`
+(idempotent; it re-applies `collMod` validators) before the first write.
 
 ## 2. Atlas state (live)
 
@@ -102,6 +109,41 @@ Spec resolutions (spec was ambiguous or self-contradictory)
     `pipeline_json: str` (arbitrary-key objects don't fit strict structured output); mapped to domain
     `Proposal`. Wire schemas live in `impl/`, never in `domain/`.
 
+## 3a. M0 review — what changed (binding; don't relitigate)
+
+Review item numbers are the review's § D table. All code changes are covered by tests in
+`engine/tests/test_learning_design.py`, `test_domain.py` and `test_config.py`.
+
+| # | Change | Where |
+|---|---|---|
+| 3 (B1) | **Paired backtest under the current store.** `BacktestSample` gained `baseline_correct` (replay without the draft) and `context` (admitted ids consulted). `fixed` = with ∧ ¬without; `broken` = without ∧ ¬with; `original_correct` is only the sampling stratum. `Backtester` takes the arm's `Consulter` (not `DecisionRepository`) so replays run in the current admitted store, minus the predecessor. Cost 2 × `BACKTEST_N` proposer calls per draft. | `domain/backtest.py`, `learn/backtest.py` |
+| 3 | `Episode.collections` (additive) so a replay can rebuild its `Question`. | `domain/episode.py`, `loop/episode.py` |
+| 4 (A2) | **`ungated` arm**: curator `ungated` = [L0, DirectAdmit]; `write_path: episodic`, `consultation: hooks`, same as `governed` but the curator. `governed − ungated` is the effect of the gate (F6). Lint bans the arm name in records. | `learn/curators.py`, `ports/registry.py`, `conf/arms.yaml`, `lint_language.py` |
+| 5 (A2) | **Naive's lesson defined.** `domain/lesson.py`: `Lesson{title, kind ∈ taxonomic/procedural/preference, payload}`; `lesson_entry` fills the entry contract mechanically (one chosen option, hook copied from the episode's terms + collection for residual attribution only, no revisit latch, residue says ungoverned). `Models.lesson(episode, observation)` writes it from the episode, the authority's figure + phrasing and the retry pipeline; model `NAIVE_LESSON_MODEL` = Sonnet (same as the nominator, so the payload's author is not a confound; drop to Haiku if spend bites). `SelfGrade.lesson` is now a `Lesson`. `naive`/`self_ref` curators take `LessonShape()` as L0 (the entry-contract L0 would refuse every lesson). Orchestration stub: `learn/direct.py: DirectWriter`. | `domain/lesson.py`, `ports/models.py`, `learn/layers.py`, `learn/direct.py`, `impl/models_anthropic.py` |
+| 6 (B5) | **L3 records by default.** `L3Lenses` is implemented: panel → current weights → score; `LENS_MODE=record` always passes (every draft reaches L4 and labels lensfit); `gate` refuses below `LENS_THRESHOLD` except a deterministic `LENS_EXPLORE_EPS` share. Needs `weights: LensRepository` and `seed`. | `learn/layers.py`, `config.py` |
+| 7 (B2) | **Revisit guard** counts residuals that are attributable ∧ signature-matched ∧ agree in direction (sign of answer − figure); largest agreeing group must reach `min_residuals`. Per-episode `SIGNATURE_CHECKS` still don't discriminate (documented); direction does. | `loop/residuals.py` |
+| 8 (B4) | **Carry every open observation**: `CARRY_ROUNDS` default `None` (= all). | `config.py`, `learn/episodic.py` |
+| 9 (B6) | **Nominator not blind; inputs bounded.** `NominatorInput.__post_init__` refuses episodes/observations outside the shape; new `neighbour_residuals`. `Nominator` gains `decisions`, `representation`, `similarity`, `neighbour_k` and fills neighbours before drafting; L2 reuses them via `CurationContext.neighbours`. | `ports/models.py`, `learn/nominate.py` |
+| 10 (B3) | **Direction read (E4) is part of the bar.** `DirectionRead` (domain), `EpisodeRepository.direction_read` (one `$facet`; authority arms only, reads `correct`), `Bar.direction_clears` with `BAR_MIN_GAP` 0.10 over ≥ `BAR_MIN_MATCHED` 10, `presentation_filter(shape)` (shared terms, else templates). | `domain/draft.py`, `ports/store.py`, `store/repositories.py`, `learn/episodic.py` |
+| 2 (B2) | **One quirk per question.** `QuestionBank` refuses multi-quirk templates; `hidden_quirks(template, persona, persona_quirks)` refuses a preference persona on a quirk template (Dana on controls only). Authority's phrasing therefore names the question's one quirk. Pack design rule + gold isolation test are M1 work (see § 5). | `world/questions.py`, `world/authority.py`, `packs/analytics-v1.yaml` |
+| 11 (B7) | **Readings resolve.** `V_EVERY` 150 + `V_OFFSET` 75 (reads at 75, 225, …; never on D1/D2). `metrics/paired.py`: paired bootstrap difference (`BOOTSTRAP_N` 2000, `CI_LEVEL` 0.90) and three-way verdict vs a margin (above: lo > +m; below: hi < −m; else within). `forecasts.yaml` entries are now `{claim, reading, margin, unit}`; F6 added (governed − ungated). Run A is labelled a pilot: knobs that move before Run B force re-registered forecasts and a knob diff in the report. | `config.py`, `loop/runner.py`, `metrics/paired.py`, `conf/forecasts.yaml` |
+| 12 (A1) | **Claim narrowed**: "admits only what the authority's figures reproduce out of sample"; residue named (a consistently wrong authority passes); F2 is a sanity check; lensfit is not pitched as "learns which questions to ask". | SPEC § 0/1/7.4/9/14, README, CLAUDE.md, package docstring |
+| 13 (A3) | `self_ref` moved up the cut order. **`FROZEN_STREAM` default true**: `frozen` is the paired no-learning reference. The arm-name branch in `Settings.arms()` is gone (`stream_knob: frozen_stream` in `arms.yaml`). | `config.py`, `conf/arms.yaml`, SPEC § 13 |
+| 1 (C) | Pilot gate moved to the front of M1 (§ 5); minimum configuration recorded (§ 5, SPEC § 13). | plan only |
+
+Departures from the review, decided here:
+- **F1 is not read from `frozen` alone.** `frozen` never holds a Q1 decision, so its Q1 accuracy may not fall at
+  D1 (it is wrong before and after). F1 now reads the calibration gap of any arm holding a pre-D1 Q1
+  decision (in practice `naive`/`ungated` until replaced, `governed` until superseded), with `frozen` as the
+  reference. Demo beat 1 (SPEC § 18) was reworded to match.
+- **Minimum configuration's "L2 routes every draft as new"** would make D1 supersession impossible. The plan
+  keeps one exception: a supersede the nominator declares against a *contested* neighbour (open dispositive
+  fire). Not yet coded; it is the L2 to build if the full L2 is cut.
+- SPEC § 14 gained departure 5 (no slot-factored backward pass, review B8) as a named post-event avenue.
+
+Still open from the review (post-event, recorded in SPEC): multi-quirk templates with a residual-reduction
+backtest read and an authority naming a quirk the answer actually missed; slot-factored routing of evidence.
+
 ## 4. Known open issues (need a decision or user action)
 
 - **Floor views vs roles (SPEC § 20.2 conflict):** learner is specced `read@world`, but floor views must be
@@ -115,42 +157,64 @@ Spec resolutions (spec was ambiguous or self-contradictory)
 - `proposer_model = claude-haiku-4-5` is unverified against the API (SPEC § 3 verify). Haiku 4.5 rejects
   `output_config.effort` — `_parse` only sends effort when passed (nominator only).
 - TELLS regexes in `lint_language.py` are a first cut (e.g. `\b(I|we|our|us)\b` is case-insensitive).
-- `loop/residuals.SIGNATURE_CHECKS` are first-cut per-episode predicates; `date_offset` needs question
-  params to be meaningful (M2).
+- `loop/residuals.SIGNATURE_CHECKS` are first-cut per-episode predicates that don't discriminate (all but
+  `rounding` reduce to "answer differs"; `rounding`'s `< 1000` is a pack-dependent literal). The guard's
+  direction read carries the discrimination; `date_offset` needs question params (M2).
+- **Spend:** paired backtest doubles replay calls (16 Haiku per draft); `naive` lesson writer is one Sonnet
+  call per reducible miss. Watch `spend` in the pilot; `NAIVE_LESSON_MODEL` and `BACKTEST_N` are the levers.
+- The pack's quirk placement under the one-quirk rule is unsolved for Q1/Q2/Q8 (all act on customers). SPEC
+  § 4.2 gives the two routes: place each population where the others' definitions already exclude it, or
+  scope each quirk's templates away from the others (Q2 via account totals). Decide at M1 step 2.
 
-## 5. Next — M1 (world), in order
+## 5. Next — M1 (world), in order — pilot gate first
 
-Done when: adapter, `analytics-v1` pack, transform registry, gold, questions, scorer, authority; gold tests
-pass; pilot gate (§ 12) reads in range.
+Done when: pilot gate (§ 12) reads in range; adapter, `analytics-v1` pack, transform registry, gold,
+questions, scorer, authority; gold tests and the gold isolation test pass.
 
 0. User loads sample data (§ 2 above). Then **kickoff checks (§ 4.2 verify)**: types of `price`/`total`
    (strings), ticker set in `transactions`, distribution of `accounts.limit`. Fix Q6 members and Q7 `T`.
-1. `engine/packs/analytics-v1.yaml`: fill `quirks:` Q1–Q8, P1, N1 and `poison_bank:` per § 4.2 (≥ 4
-   templates, ≥ 3 phrasings each; `Pack.validate_coverage()` checks this). Opaque field names, decoys
-   (`deleted_at` decoy for Q3).
-2. `world/transforms.py`: register `@materialize` and `@gold` transforms; use `stable_bucket(key, seed)`
-   for hash assignment. **Gold test per transform on a hand-computed fixture before any arm runs.**
-3. `world/questions.py`: ~12 `Template`s, `QuestionBank.stream(seed)` (65/35 quirk/control via
-   `QUIRK_SHARE`), `v_set(seed, size)` disjoint from the stream; populate `_hidden`.
-4. `truth/gold.py: PackGold.gold` — compose gold transforms for the question's hidden quirks at
-   `world_version` (`PackWorld.world_version`: `v0`, `v0+D1`, `v0+D1+D2`).
-5. `world/authority.py`: `_abs_tol_for` (Dana rounding → 0.5), `_figure` (N1 poison under `(seed, idx)`),
-   `_phrasing` (one missed quirk at random; `AUTHORITY_LEVEL`).
-6. `PackWorld.build` → `SampleAnalyticsAdapter.build` writes `world`; add a CLI command `build-world`.
-7. Pilot gate: frozen proposer ≤ 35% on quirk-bearing, ≥ 70% on controls over 40 stream questions — this
-   needs `AnthropicModels.propose` (M2 item, pull it forward).
+   Re-run `munchhausen setup` (stale validators, § 1).
+1. **Pilot slice:** `AnthropicModels.propose` (M2 item, pulled forward), the adapter's `build` for
+   customers/accounts/transactions, ~4 control templates + Q1's materialize/gold transforms and templates,
+   `QuestionBank.stream`, `PackGold.gold`. Run the **pilot gate**: frozen proposer ≤ 35% on Q1, ≥ 70% on
+   controls over 40 questions. Failing high → rename mnemonic fields, then lower the proposer; failing low on
+   controls → raise the proposer or cut templates. Nothing else matters until this reads in range.
+2. `engine/packs/analytics-v1.yaml`: fill the rest — minimum set first (Q3 floor + `deleted_at` decoy, Q5,
+   P1, N1), then Q2/Q4/Q6/Q7/Q8 as time allows. **One quirk per template** (`QuestionBank` enforces it);
+   P1 on control templates only (pass `persona_quirks={"dana": "P1_dana_rounding"}`); decide the Q1/Q2/Q8
+   placement (§ 4). ≥ 4 templates, ≥ 3 phrasings each (`Pack.validate_coverage()`).
+3. `world/transforms.py`: register `@materialize` and `@gold` transforms; `stable_bucket(key, seed)` for hash
+   assignment. **Gold test per transform on a hand-computed fixture, plus the gold isolation test** (each
+   quirk template's gold unchanged by every other quirk's gold transform), before any arm runs.
+4. `world/questions.py`: ~12 `Template`s, `stream(seed)` (65/35 via `QUIRK_SHARE`), `v_set(seed, size)`
+   disjoint from the stream; populate `_hidden` via `hidden_quirks`.
+5. `truth/gold.py: PackGold.gold` at `world_version` (`v0`, `v0+D1`, `v0+D1+D2`).
+6. `world/authority.py`: `_abs_tol_for` (Dana rounding → 0.5), `_figure` (N1 poison under `(seed, idx)`),
+   `_phrasing` (the question's one quirk; `AUTHORITY_LEVEL`).
+7. `PackWorld.build` → adapter writes `world`; CLI command `build-world`. `PackWorld.create` must pass
+   `persona_quirks` to `QuestionBank`.
 
-Then M2: `AnthropicModels.propose`, `AtlasTerms.extract` (+ in-process longest-match fallback),
-`consulter_for`, `ArmRunner.run` (cursor claim → lease → ForwardPass → barrier), term vocabulary seeding
+**Minimum configuration if the day runs short** (protects the one complete story: Q1 learned → applied on
+an unseen template → D1 fires → superseded with tombstone → recovery on the paired curve, plus the floor
+beat): quirks Q1 (D1), Q3, Q5, P1, N1; arms `frozen` (stream on), `naive`, `ungated`, `governed`; L2 routes
+new except nominator-declared supersede of a contested neighbour (§ 3a); L3 records; lensfit cut.
+
+Then M2: `AtlasTerms.extract` (+ in-process longest-match fallback), `consulter_for`, `ArmRunner.run`
+(cursor claim → lease → ForwardPass → barrier; V at `v_offset + k·v_every`), term vocabulary seeding
 (§ 22.4: schema + first `VOCAB_WARMUP` questions, never from the pack — add the test).
+
+Then M3, in the order that protects the story: observer → episodic pass (bar + direction read) → nominator
+(neighbours first) → L0/L1/L2/L3(record)/L4 with the paired `Backtester` → `ungated` → `DirectWriter` +
+`Models.lesson` for `naive` → `self_ref` last.
 
 ## 6. Map of stubs (all raise `NotImplementedError("M<n>: …")`)
 
 `grep -rn NotImplementedError engine/munchhausen` lists them. Highlights: `world/questions.py`,
 `world/authority.py`, `truth/gold.py` (M1); `impl/models_anthropic.py` propose, `agent/consultation.py`
 semantic + `consulter_for`, `store/repositories.AtlasTerms.extract`, `loop/runner.py`,
-`impl/similarity.NumpySimilarity.create` (M2); `learn/observe|episodic|nominate|backtest`, layers L2–L4,
-`impl/lens_panel.JevLensPanel.score` (M3); `metrics/*` (M3–M4); `learn/lensfit.py` (M5).
+`impl/similarity.NumpySimilarity.create` (M2); `learn/observe|episodic|nominate|backtest|direct`, layers
+L2 and L4 (L3 is implemented), `impl/lens_panel.JevLensPanel.score`, `AnthropicModels.lesson` (M3);
+`metrics/*` except `metrics/paired.py` (M3–M4); `learn/lensfit.py` (M5).
 
 ## 7. API notes verified against installed packages
 

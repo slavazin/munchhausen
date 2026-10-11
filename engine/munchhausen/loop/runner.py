@@ -27,9 +27,10 @@ class ArmRunner:
     round_size: int
     run_length: int
     v_every: int
+    v_offset: int            # V reads at v_offset, v_offset + v_every, …: never on a drift index
     on_round_close: RoundHook
 
     async def run(self) -> None:
         raise NotImplementedError(
             "M2: resume from cursor; re-issue orphaned indices; per round: claim → lease → ForwardPass.run "
-            "with `workers` concurrency → await round barrier → on_round_close; V set every v_every")
+            "with `workers` concurrency → await round barrier → on_round_close; V set at v_offset + k·v_every")

@@ -1,8 +1,9 @@
 # Munchhausen — working notes for Claude sessions
 
 Start with `CARRY_FORWARD.md` (current state, binding decisions, next steps). `SPEC.md` is the design; `corpus/LANGUAGE.md` is the lexicon (one meaning per term — use it in code and prose).
-North star: **admit only what the world confirms.** Every learned decision passes an out-of-sample backtest
-against confirmed figures, reaches the agent only through its hook, and carries a revisit trigger.
+North star: **admit only what the authority's figures reproduce out of sample.** Every learned decision passes a
+paired out-of-sample backtest against confirmed figures, reaches the agent only through its hook, and carries a
+revisit trigger. The backtest reads the authority, not the world: a consistently wrong authority passes it (SPEC § 7.4).
 
 ## Commands
 - `uv sync --all-packages` — install the workspace (engine + viewer)

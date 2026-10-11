@@ -68,8 +68,9 @@ class Settings(BaseSettings):
     authority_level: AuthorityLevel = AuthorityLevel.TERM
     authority_poison_rate: float = 0.05
     v_size: int = 40
-    v_every: int = 300
-    frozen_stream: bool = False
+    v_every: int = 150                  # V points per arm: 6 over RUN_LENGTH; ±15pp at V_SIZE 40, so read as paired
+    v_offset: int = 75                  # first V read; with V_EVERY 150 no read lands on D1_AT or D2_AT
+    frozen_stream: bool = True          # frozen runs the stream: the paired no-learning baseline
     vocab_warmup: int = 40
 
     # --- scoring -------------------------------------------------------------------------------------
@@ -86,13 +87,17 @@ class Settings(BaseSettings):
 
     # --- backward pass -------------------------------------------------------------------------------
     round_size: int = 30
-    carry_rounds: int = 3
+    carry_rounds: int | None = None     # None: carry every open observation until a shape spends it
     cluster_distance: float = 0.35
     embed_mask: Literal["none", "surfaces"] = "none"
     bar_min_obs: int = 2
     bar_min_templates: int = 2
     bar_min_templates_floor: int = 3
+    bar_min_gap: float = 0.10           # E4 direction read: miss rate inside the shape's presentation − outside
+    bar_min_matched: int = 10           # episodes the presentation must match before the gap is read
+    neighbour_k: int = 5                # admitted neighbours shown to the nominator and routed at L2
     neighbour_rerank: float = 0.85
+    lens_mode: Literal["record", "gate"] = "record"   # record: L3 scores, every draft reaches the backtest
     lens_threshold: float = 0.5
     lens_explore_eps: float = 0.1
     lens_call_mode: Literal["isolated", "joint"] = "isolated"
@@ -112,11 +117,16 @@ class Settings(BaseSettings):
     lens_fold_rho: float = 0.8
     lens_mint_min: int = 4
 
+    # --- readings ------------------------------------------------------------------------------------
+    bootstrap_n: int = 2000             # resamples for paired arm differences
+    ci_level: float = 0.90              # interval level for every paired difference and forecast verdict
+
     # --- models --------------------------------------------------------------------------------------
     proposer_model: str = "claude-haiku-4-5"
     observer_model: str = "claude-haiku-4-5"
     nominator_model: str = "claude-sonnet-5-5"
     nominator_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    naive_lesson_model: str = "claude-sonnet-5-5"   # = nominator model: the payload's author is not a confound
     lens_fallback_model: str = "claude-opus-5-5"
     planted_map_model: str = "claude-opus-5-5"
     embed_model: str = "voyage-4"
@@ -164,8 +174,8 @@ class Settings(BaseSettings):
         out: dict[str, ArmSpec] = {}
         for name, spec in raw["arms"].items():
             spec = {**spec, "name": name, "ports": {**defaults, **spec.get("ports", {})}}
-            if name == "frozen":
-                spec["stream"] = self.frozen_stream
+            if "stream_knob" in spec:                     # e.g. frozen: stream follows FROZEN_STREAM
+                spec["stream"] = getattr(self, spec.pop("stream_knob"))
             out[name] = ArmSpec.model_validate(spec)
         return out
 
@@ -178,7 +188,7 @@ class Settings(BaseSettings):
     def latch_ports(self) -> dict[str, Any]:
         return _yaml(self.conf_dir / "latch_ports.yaml")
 
-    def forecasts(self) -> dict[str, str]:
+    def forecasts(self) -> dict[str, dict[str, Any]]:
         return _yaml(self.conf_dir / "forecasts.yaml")["forecasts"]
 
     def pack_path(self, name: str | None = None) -> Path:

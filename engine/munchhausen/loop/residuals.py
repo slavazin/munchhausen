@@ -12,8 +12,11 @@ from munchhausen.domain.ids import residual_id
 from munchhausen.domain.latches import Guard
 from munchhausen.domain.scoring import ratio_delta
 
-# First-cut per-episode signature predicates over (ratio, delta). M2: refine with question params
-# (e.g. `date_offset` needs the window to cross a period boundary).
+# First-cut per-episode signature predicates over (ratio, delta). Every one but ROUNDING reduces to
+# "the answer differs", so on its own a per-episode check discriminates nothing. The discriminating read
+# is the guard's: a shifted world moves one decision's answers the same way on every consultation
+# (D1 undercounts active customers each time), while poisoned figures and residuals borrowed from
+# another quirk scatter. M2: refine with question params (`date_offset` needs a boundary-crossing window).
 SIGNATURE_CHECKS: dict[Signature, Callable[[float | None, float | None], bool]] = {
     Signature.RATIO: lambda r, d: r is not None and abs(r - 1.0) > 1e-6,
     Signature.EXCLUSION: lambda r, d: d is not None and d != 0,
@@ -42,7 +45,19 @@ def compute_residuals(episode_id: str, consulted: Sequence[Consultation], decisi
 
 
 def guard_holds(recent: Sequence[Episode], decision_id: str, guard: Guard) -> tuple[bool, list[str], list[str]]:
-    """≥ min_residuals attributable residuals within the decision's last `window` consultations."""
+    """≥ min_residuals residuals within the decision's last `window` consultations that are attributable,
+    signature-matched, and agree in direction (the sign of answer − figure). Returns the largest agreeing
+    group's episode and residual ids."""
     window = sorted(recent, key=lambda e: e.idx, reverse=True)[: guard.window]
-    hits = [(e.id, r.id) for e in window for r in e.residuals if r.decision_id == decision_id and r.attributable]
+    by_sign: dict[int, list[tuple[str, str]]] = {}
+    for e in window:
+        for r in e.residuals:
+            if r.decision_id == decision_id and r.attributable and r.signature_match:
+                by_sign.setdefault(_sign(r.delta), []).append((e.id, r.id))
+    hits = max(by_sign.values(), key=len, default=[])
     return len(hits) >= guard.min_residuals, [h[0] for h in hits], [h[1] for h in hits]
+
+
+def _sign(delta: float | None) -> int:
+    """Direction of a residual; non-numeric answers (sets) share one group."""
+    return 0 if delta is None else (delta > 0) - (delta < 0)

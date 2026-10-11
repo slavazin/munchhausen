@@ -81,17 +81,36 @@ def test_l0_refuses_structural_gaps_and_leaked_figures() -> None:
     assert any("floor latch" in p for p in bad_floor.l0_violations([]))
 
 
+def _sample(t: str, o: bool, with_: bool, without: bool) -> BacktestSample:
+    return BacktestSample(episode_id=f"e{t}{o}{with_}{without}", template=t, original_correct=o,
+                          replay_correct=with_, baseline_correct=without)
+
+
+TH = BacktestThresholds(min_fixed=2, min_fixed_heldout=1, max_broken=1)
+
+
+def _read(sampled: tuple[BacktestSample, ...]) -> Backtest:
+    return Backtest.read(id="B", run_id="r", arm="g", draft_id="d", sampled=sampled,
+                         source_templates=frozenset({"a"}), thresholds=TH)
+
+
 def test_backtest_read_requires_heldout_fix() -> None:
-    th = BacktestThresholds(min_fixed=2, min_fixed_heldout=1, max_broken=1)
-    s = lambda t, o, r: BacktestSample(episode_id=f"e{t}{o}{r}", template=t, original_correct=o, replay_correct=r)  # noqa: E731
-    only_source = (s("a", False, True), s("a", False, True), s("b", True, True))
-    bt = Backtest.read(id="B", run_id="r", arm="g", draft_id="d", sampled=only_source,
-                       source_templates=frozenset({"a"}), thresholds=th)
+    only_source = (_sample("a", False, True, False), _sample("a", False, True, False), _sample("b", True, True, True))
+    bt = _read(only_source)
     assert (bt.fixed, bt.fixed_heldout, bt.verdict) == (2, 0, BacktestVerdict.REFUSE)
-    with_heldout = (*only_source[:1], s("c", False, True), s("b", True, False))
-    bt = Backtest.read(id="B", run_id="r", arm="g", draft_id="d", sampled=with_heldout,
-                       source_templates=frozenset({"a"}), thresholds=th)
+    with_heldout = (*only_source[:1], _sample("c", False, True, False), _sample("b", True, False, True))
+    bt = _read(with_heldout)
     assert (bt.fixed, bt.fixed_heldout, bt.broken, bt.verdict) == (2, 1, 1, BacktestVerdict.ADMIT)
+
+
+def test_backtest_read_is_paired() -> None:
+    """A miss re-solved by chance in both replays fixes nothing; a hit lost in both breaks nothing."""
+    chance = (_sample("b", False, True, True), _sample("c", False, True, True), _sample("c", True, False, False))
+    bt = _read(chance)
+    assert (bt.fixed, bt.broken, bt.verdict) == (0, 0, BacktestVerdict.REFUSE)
+    # the counterfactual, not the recorded outcome, decides: a recorded hit the draft rescues counts as fixed
+    rescued = (_sample("b", True, True, False), _sample("c", True, True, False))
+    assert _read(rescued).fixed == 2
 
 
 def test_supersede_plan_flips_predecessor_and_wires_lineage() -> None:

@@ -1,4 +1,9 @@
-"""Backtest records and the admission rule (SPEC § 7.4). The dispositive layer's read is pure."""
+"""Backtest records and the admission rule (SPEC § 7.4). The dispositive layer's read is pure.
+
+The read is paired: each sampled question is replayed twice under the arm's current admitted store, once
+with the draft and once without it. Only the difference counts, so a miss the proposer re-solves by chance
+in both replays fixes nothing, and a hit it loses in both breaks nothing.
+"""
 
 from __future__ import annotations
 
@@ -15,16 +20,18 @@ class BacktestVerdict(StrEnum):
 class BacktestSample(Value):
     episode_id: str
     template: str
-    original_correct: bool
-    replay_correct: bool
+    original_correct: bool            # the recorded first attempt; a sampling stratum, not the counterfactual
+    replay_correct: bool              # replay with the draft, against the confirmed figure
+    baseline_correct: bool            # paired replay without the draft, same context
+    context: tuple[str, ...] = ()     # admitted decision ids both replays consulted (current store)
 
     @property
     def fixed(self) -> bool:
-        return not self.original_correct and self.replay_correct
+        return self.replay_correct and not self.baseline_correct
 
     @property
     def broken(self) -> bool:
-        return self.original_correct and not self.replay_correct
+        return self.baseline_correct and not self.replay_correct
 
 
 class BacktestThresholds(Value):

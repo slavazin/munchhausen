@@ -1,8 +1,41 @@
-# Pre-registered forecasts (SPEC § 11). Written to runs.forecasts before the first episode; never edited.
-# The report prints each one beside its reading, and a disagreement stands as a disagreement.
+# Pre-registered forecasts (SPEC § 11). Written to runs.forecasts before the first episode of the run they
+# govern; never edited after it. Run A is a pilot: if any knob moves before Run B, Run B's forecasts are
+# re-registered at its start and the report lists every knob that moved (diff of runs.knobs).
+#
+# Comparisons between arms are paired (the arms share the stream by index): the reading is the mean paired
+# difference with a bootstrap CI_LEVEL interval and its n. Verdict, three-way, against the stated margin m:
+#   above  — the interval's lower bound > +m
+#   below  — the interval's upper bound < −m
+#   within — otherwise (the reading does not resolve the forecast at margin m)
+# The report prints each forecast beside its reading, and a disagreement stands as a disagreement.
 forecasts:
-  F1: the self_ref calibration gap over D1_AT…D1_AT+150 exceeds its gap over the 150 episodes before D1_AT
-  F2: governed admits 0 N1-derived decisions; naive admits ≥ 1
-  F3: naive holds P1 at org scope; governed holds it at persona scope or not at all
-  F4: governed drift-to-supersede latency for D1 is below naive's (where naive resolves the drift at all)
-  F5: on quirk-bearing stream questions after round 10, governed stream accuracy ≥ naive's
+  F1:
+    claim: an arm holding a pre-D1 Q1 decision shows a calibration gap over D1_AT…D1_AT+150 above its gap over the 150 episodes before D1_AT, until a successor is admitted
+    reading: calibration gap (mean confidence − accuracy) after minus before, per arm; frozen with the stream on is the no-decision reference
+    margin: 0.05
+    unit: accuracy points (fraction)
+  F2:
+    claim: "sanity check, not a finding: governed admits 0 N1-derived decisions; naive admits ≥ 1"
+    reading: planted_map N1-derived admitted count per arm
+    margin: 0
+    unit: decisions
+  F3:
+    claim: naive holds P1 at org scope; governed holds it at persona scope or not at all
+    reading: planted_map P1 scope per arm
+    margin: 0
+    unit: decisions
+  F4:
+    claim: governed drift-to-supersede latency for D1 is below naive's and below ungated's, where those arms resolve the drift at all
+    reading: latency difference (other − governed); a single drift event per arm, so the verdict is the sign beyond the margin, with no interval
+    margin: 30
+    unit: episodes (one ROUND_SIZE)
+  F5:
+    claim: on quirk-bearing stream questions after round 10, governed accuracy is above naive's
+    reading: paired difference governed − naive, same questions by index
+    margin: 0.05
+    unit: accuracy (fraction)
+  F6:
+    claim: on quirk-bearing stream questions after round 10, governed accuracy is above ungated's (the gate's effect)
+    reading: paired difference governed − ungated, same questions by index
+    margin: 0.05
+    unit: accuracy (fraction)

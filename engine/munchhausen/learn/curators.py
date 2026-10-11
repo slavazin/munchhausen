@@ -44,9 +44,17 @@ def hitl(l0: Layer, l1: Layer, l2: Layer, l3: Layer, l4: Layer) -> LayeredCurato
     return LayeredCurator("hitl", [l0, l1, l2, l3, l4], owner_required=True)
 
 
+def ungated(l0: Layer) -> LayeredCurator:
+    """The ablation that isolates the gate: governed's nominator, bar and hooks, admitted at L0.
+    `governed` minus `ungated` reads what L2–L4 add; every other difference between them is zero."""
+    return LayeredCurator("ungated", [l0, DirectAdmit()])
+
+
 def naive(l0: Layer) -> LayeredCurator:
+    """Lessons admitted directly. Pass `LessonShape()` as L0 (a lesson carries no entry-contract slots)."""
     return LayeredCurator("naive", [l0, DirectAdmit()])
 
 
 def self_ref(l0: Layer) -> LayeredCurator:
+    """Self-graded lessons admitted directly. Pass `LessonShape()` as L0."""
     return LayeredCurator("self_ref", [l0, DirectAdmit()])

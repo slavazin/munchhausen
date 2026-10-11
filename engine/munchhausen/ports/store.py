@@ -13,7 +13,7 @@ from munchhausen.domain.admission import Admission
 from munchhausen.domain.backtest import Backtest
 from munchhausen.domain.common import Disposer, FireDisposition, Pipeline
 from munchhausen.domain.decision import Amendment, Decision
-from munchhausen.domain.draft import Draft, LayerOutcome
+from munchhausen.domain.draft import DirectionRead, Draft, LayerOutcome
 from munchhausen.domain.episode import Episode
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
@@ -69,6 +69,11 @@ class EpisodeRepository(Protocol):
         ...
 
     async def consultations_of(self, run_id: str, arm: str, decision_id: str, last_n: int) -> list[Episode]: ...
+
+    async def direction_read(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int) -> DirectionRead:
+        """Stream misses inside vs outside a presentation filter, hits included (E4). Reads `correct`, so
+        only arms with an authority call it; there the authority's reply makes a miss learner-legal."""
+        ...
 
 
 @runtime_checkable

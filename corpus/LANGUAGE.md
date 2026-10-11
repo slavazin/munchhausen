@@ -28,6 +28,10 @@ The world's term vocabulary is data in Atlas (`terms`); this file states its rul
 | evidence state | `clear` or `contested`, computed from open fires; orthogonal to lifecycle | a lifecycle status |
 | stand-in adjudicator | the autonomous party occupying the doctrine's owner seat: lens panel plus backtest | oracle agent, judge |
 | tombstone | a superseded or retired decision kept with `superseded_by` or a reason | a deleted record |
+| lesson | the write unit of the ungoverned arms (`naive`, `self_ref`): one model-written `{title, kind, payload}`, admitted directly | a decision (a lesson becomes one only by admission); an observation (which never states a fix) |
+| paired replay | the backtest's read: each sampled question replayed under the current store with and without the draft; only the difference counts | a replay against the episode's old context |
+| direction read | the bar's check that a shape's presentation marks a gap: miss rate over every matched episode, hits included, against the rate outside | the shape's own miss count (selected on the outcome) |
+| paired difference | two arms' outcomes on the same stream indices, differenced, with a bootstrap interval and n; its verdict is above, within or below a stated margin | an unpaired comparison of two accuracies |
 
 ## 1. Purpose
 

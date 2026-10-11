@@ -1,5 +1,6 @@
 # Arms (SPEC § 5). The engine branches on these fields, never on an arm's name.
 # `ports` selects implementations by name from munchhausen/ports/registry.py; written to runs.ports at start.
+# Arms share the stream by index, so every comparison between two arms is a paired difference.
 
 default_ports:
   representation: voyage-4
@@ -15,24 +16,31 @@ arms:
     write_path: none
     consultation: none
     curator: null
-    claim: baseline; runs the V set only unless FROZEN_STREAM
+    stream_knob: frozen_stream
+    claim: "baseline: no learning; with the stream on, the paired reference for every other arm"
   self_ref:
     authority: false
     write_path: self_grade
     consultation: semantic
     curator: self_ref
-    claim: "self-reference: prior capture and drift blindness"
+    claim: "self-reference: no outside information; cannot learn a counter-prior fact by construction"
   naive:
     authority: true
     write_path: direct
     consultation: semantic
     curator: naive
-    claim: an external signal without governance
+    claim: "the off-the-shelf memory shape: one lesson per observation, retrieved top-k, admitted directly"
+  ungated:
+    authority: true
+    write_path: episodic
+    consultation: hooks
+    curator: ungated
+    claim: "the gate: governed's nominator, bar and hooks, admitted at L0 (governed − ungated reads L2–L4)"
   governed:
     authority: true
     write_path: episodic
     consultation: hooks
     curator: governed
-    claim: governance
+    claim: "governance: episodic pass, stand-in adjudicator, paired backtest"
     ports:
       lens_panel: jev

@@ -1,8 +1,10 @@
 """The authority: the stakeholder simulator (SPEC § 4.4). Deterministic templates, no LLM.
 
 On a wrong first attempt, in arms that receive it: `terse` (figure), `term` (figure + one phrasing naming
-a missed concept, never its definition), or `rule` (control only). N1 swaps in a poisoned figure under
-the same phrasing with probability AUTHORITY_POISON_RATE.
+the question's quirk, never its definition), or `rule` (control only). Every question touches at most one
+quirk (`world/questions.py`), so the phrasing names the concept the answer actually missed — never a
+co-occurring quirk the answer got right. N1 swaps in a poisoned figure under the same phrasing with
+probability AUTHORITY_POISON_RATE.
 """
 
 from __future__ import annotations
@@ -39,4 +41,4 @@ class Authority:
         raise NotImplementedError("M1: N1 poison draw under (seed, idx), else gold")
 
     def _phrasing(self, question: Question, idx: int) -> str | None:
-        raise NotImplementedError("M1: one missed quirk at random; phrasing per AUTHORITY_LEVEL")
+        raise NotImplementedError("M1: the question's one quirk (bank.hidden); phrasing per AUTHORITY_LEVEL")

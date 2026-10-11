@@ -1,4 +1,4 @@
-"""Munchhausen: a harness that admits only what the world confirms.
+"""Munchhausen: a harness that admits only what the authority's figures reproduce out of sample.
 
 Layers (dependencies point inward only; enforced by tests/test_architecture.py):
 

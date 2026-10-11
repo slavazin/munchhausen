@@ -23,6 +23,23 @@ class Shape(Value):
     source: str = "internal"   # internal | external (SignalSource)
 
 
+class DirectionRead(Value):
+    """E4, part of the bar: the miss rate over every episode the shape's presentation matches, hits
+    included, against the miss rate outside it. A shape formed from misses agrees with itself by
+    construction; only a gap over the whole matched population says the shape marks where answers fail."""
+
+    misses_in: int
+    n_in: int
+    misses_out: int
+    n_out: int
+
+    @property
+    def gap(self) -> float:
+        rate_in = self.misses_in / self.n_in if self.n_in else 0.0
+        rate_out = self.misses_out / self.n_out if self.n_out else 0.0
+        return rate_in - rate_out
+
+
 class Route(StrEnum):
     """L2 routing of a draft against its nearest admitted neighbour."""
 

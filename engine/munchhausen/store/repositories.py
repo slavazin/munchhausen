@@ -14,7 +14,7 @@ from pymongo.errors import DuplicateKeyError
 
 from munchhausen.domain.backtest import Backtest
 from munchhausen.domain.common import Disposer, FireDisposition, Pipeline
-from munchhausen.domain.draft import Draft, DraftStatus, LayerOutcome
+from munchhausen.domain.draft import DirectionRead, Draft, DraftStatus, LayerOutcome
 from munchhausen.domain.episode import EVALUATION_ONLY_FIELDS, Episode
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
@@ -73,6 +73,18 @@ class AtlasEpisodes(_Ledger[Episode]):
         cur = self._c.find({"run_id": run_id, "arm": arm, "consulted.decision_id": decision_id}
                            ).sort("idx", -1).limit(last_n)
         return [Episode.model_validate(d) async for d in cur]
+
+    async def direction_read(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int) -> DirectionRead:
+        pipeline: Pipeline = [
+            {"$match": {"run_id": run_id, "arm": arm, "stream": "stream", "idx": {"$lt": before_idx}}},
+            {"$facet": {side: [{"$match": f}, {"$group": {"_id": None, "n": {"$sum": 1},
+                                                          "misses": {"$sum": {"$cond": ["$correct", 0, 1]}}}}]
+                        for side, f in (("in", inside), ("out", {"$nor": [inside]}))}},
+        ]
+        docs = await (await self._c.aggregate(pipeline)).to_list()
+        row = {side: (docs[0][side][0] if docs and docs[0][side] else {"n": 0, "misses": 0}) for side in ("in", "out")}
+        return DirectionRead(misses_in=row["in"]["misses"], n_in=row["in"]["n"],
+                             misses_out=row["out"]["misses"], n_out=row["out"]["n"])
 
 
 class AtlasObservations(_Ledger[Observation]):

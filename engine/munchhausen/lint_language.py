@@ -17,7 +17,7 @@ TELLS: dict[str, str] = {
     r"\b(I|we|our|us)\b": "impersonal present tense",
     r"\b(now|currently|recently|this round|so far|again)\b": "a dated fact (at_idx) or a premise",
     r"\b(arm|episode|run)\s*#?\d+\b": "anchor through warrant ids, not prose",
-    r"\b(governed|naive|self_ref|frozen)\b": "never name an arm in a record",
+    r"\b(governed|ungated|naive|self_ref|frozen)\b": "never name an arm in a record",
 }
 VACUOUS_COUNTERFACTUAL = re.compile(r"or (was|is) it (fine|ok|correct)\??$", re.IGNORECASE)
 MAX_TITLE_WORDS, MAX_PAYLOAD_WORDS = 12, 60

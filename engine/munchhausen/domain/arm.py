@@ -29,6 +29,6 @@ class ArmSpec(Value):
     write_path: WritePath
     consultation: ConsultationMode
     curator: str | None = None
-    stream: bool = True                      # frozen runs the V set only unless FROZEN_STREAM
+    stream: bool = True                      # false: V set only (frozen follows FROZEN_STREAM)
     claim: str = ""
     ports: dict[str, str] = Field(default_factory=dict)   # port → implementation name overrides

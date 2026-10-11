@@ -147,9 +147,9 @@ class EntryContract(Value):
             out.append("kind floor requires a floor latch")
         if self.kind is not DecisionKind.FLOOR and self.floor is not None:
             out.append("a floor latch is allowed on kind floor only")
-        leaked = _numbers_in(self.payload) & {_norm(f) for f in source_figures}
+        leaked = leaked_figures(self.payload, source_figures)
         if leaked:
-            out.append(f"payload contains a source figure: {sorted(leaked)}")
+            out.append(f"payload contains a source figure: {leaked}")
         return out
 
 
@@ -173,6 +173,11 @@ def evidence_state(open_fire_roles: Iterable[tuple[FireRole, FireDisposition]]) 
         role is FireRole.DISPOSITIVE and disp is FireDisposition.OPEN for role, disp in open_fire_roles
     )
     return EvidenceState.CONTESTED if contested else EvidenceState.CLEAR
+
+
+def leaked_figures(text: str, source_figures: Iterable[float]) -> list[str]:
+    """Numbers in `text` equal to a source answer or figure: the mechanical floor under `case_leak`."""
+    return sorted(_numbers_in(text) & {_norm(f) for f in source_figures})
 
 
 _NUM = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")

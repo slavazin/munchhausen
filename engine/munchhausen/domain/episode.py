@@ -76,6 +76,7 @@ class Episode(Record):
     tokens: dict[str, int] = Field(default_factory=dict)
     latency_ms: int = 0
     stream: str = "stream"                 # stream | v | injection
+    collections: tuple[str, ...] = ()      # the template's logical collections: a replay rebuilds the Question
 
 
 # Fields a learner in an arm without an authority must never read (SPEC § 5: self_ref self-grades).

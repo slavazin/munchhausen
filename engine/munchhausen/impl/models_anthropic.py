@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 from munchhausen.config import Settings
 from munchhausen.domain.decision import Decision, EntryContract
 from munchhausen.domain.episode import Consultation, Episode, Proposal
-from munchhausen.domain.observation import ObservationNote
+from munchhausen.domain.lesson import Lesson
+from munchhausen.domain.observation import Observation, ObservationNote
 from munchhausen.domain.registers import SpendRow
 from munchhausen.impl._base import key
 from munchhausen.ports.models import NominatorInput, ProposerInput, SelfGrade
@@ -67,6 +68,9 @@ class AnthropicModels:
 
     async def nominate(self, inp: NominatorInput) -> tuple[EntryContract, tuple[str, ...]]:
         raise NotImplementedError("M3: nominator with the read-only world tool; runs the prior option first")
+
+    async def lesson(self, episode: Episode, observation: Observation) -> Lesson:
+        raise NotImplementedError("M3: naive lesson writer (NAIVE_LESSON_MODEL) → Lesson")
 
     async def self_grade(self, episode: Episode) -> SelfGrade:
         raise NotImplementedError("M3: self_ref self-grade as 'the subject-matter expert'")

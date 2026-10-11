@@ -12,6 +12,11 @@ drift_schedule:            # gold-only; the `world` database is never mutated af
   D1: {at_knob: D1_AT, quirk: Q1_active_customer}
   D2: {at_knob: D2_AT, quirk: Q4_fiscal_year}
 
+# One quirk per question (world/questions.py): each quirk-bearing template lists exactly one quirk; P1's
+# templates are control templates (Dana is drawn on controls only). Overlapping populations (k7 test
+# customers, case-duplicate emails) are materialized where the other quirks' definitions already exclude
+# them, and a gold isolation test checks it. Build order: controls + Q1 first, then the pilot gate (§ 12),
+# then the rest. Minimum set if the day runs short: Q1 (with D1), Q3, Q5, P1, N1.
 quirks: []                 # M1: Q1–Q8, P1, N1 per SPEC § 4.2, each with ≥ 4 templates and ≥ 3 phrasings
 # Entry shape:
 #   - id: Q1_active_customer

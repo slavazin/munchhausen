@@ -41,6 +41,7 @@ REGISTRY: dict[str, dict[str, str]] = {
     },
     "curator": {
         "governed": "munchhausen.learn.curators:governed",
+        "ungated": "munchhausen.learn.curators:ungated",
         "naive": "munchhausen.learn.curators:naive",
         "self_ref": "munchhausen.learn.curators:self_ref",
         "hitl": "munchhausen.learn.curators:hitl",
