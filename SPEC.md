@@ -43,14 +43,14 @@ Problem statements covered:
 - **1 Recursive Harnessing:** the harness rewrites its rules, guardrails and tool access (§ 8).
 - **2 Long Horizon:** a resumable prequential stream learning from a hard numeric metric.
 
-Raindrop RSI prize: the second-order loop (§ 9). The stand-in adjudicator learns which questions to ask, graded by backtest outcomes, never by its own verdicts.
+Raindrop RSI prize ($3,000): the second-order loop (§ 9), with Raindrop as an optional outside observer (§ 25). The stand-in adjudicator learns which questions to ask, graded by backtest outcomes, never by its own verdicts.
 
 **Do:** keep the agent acting at the centre of every demo beat; the event bans projects whose main feature is a dashboard.
 **Don't:** strip the curves; they carry the self-reference claim. They sit in a side pane.
 
 ## 2. Lexicon
 
-The spec uses the terms of `gce/GCE-DOCTRINE.md` and of the corpus language guide. The terms below carry one meaning each throughout this file and the code.
+The spec uses the terms of `gce/GCE-DOCTRINE.md` and of the corpus language guide. From M0, `corpus/LANGUAGE.md` (§ 22) is the lexicon's one home. The terms below carry one meaning each throughout this file and the code.
 
 | Term | Means here | Not |
 |---|---|---|
@@ -86,7 +86,7 @@ Model and service names are dated facts (verified 2026-10-10 unless marked). Kic
 | Driver | `pymongo` `AsyncMongoClient` | `motor` |
 | Embeddings | Voyage `voyage-4` (1024-d), `voyageai` SDK | `voyage-4-lite` |
 | Rerank | Voyage `rerank-3` (released 2026-09-30) | `rerank-3-lite` |
-| Vector search | Atlas Vector Search indexes `decisions_vec` and `observations_vec`. No Atlas Search index and no `$rankFusion`; hooks replace lexical retrieval. | cosine in `numpy` over the arm's records |
+| Vector and text search | Atlas Vector Search (`decisions_vec`, `observations_vec`) and Atlas Search (`terms_search`, then `decisions_search` and `episodes_search` as the index budget allows), in the order of § 20.1. `governed` consultation stays hook-keyed; Atlas Search extracts the hook terms (§ 20.3), and `$rankFusion` serves `naive` and L2 only. | cosine in `numpy`; in-process term extraction |
 | Proposer (the agent being improved) | `claude-haiku-4-5` (**verify** that the API serves it; knob `PROPOSER_MODEL`) | `claude-haiku-5-5` |
 | Observer | `claude-haiku-4-5` | — |
 | Nominator | `claude-sonnet-5-5`, effort `medium`, with a read-only world query tool | `claude-opus-5-5` |
@@ -96,7 +96,7 @@ Model and service names are dated facts (verified 2026-10-10 unless marked). Kic
 | Stats | `numpy`, `scikit-learn` (`AgglomerativeClustering`, `LogisticRegression`, `roc_auc_score`) | — |
 | Live feed | Atlas change streams on `fires`, `decisions`, `rounds` | polling every 2 s |
 | Viewer | FastAPI + SSE + one static `index.html` (Chart.js from CDN) | — |
-| Tracing | Raindrop SDK: one interaction per episode; signals `correct`, `floor_filtered`, `fire`, `admission` (**verify** the package name) | none |
+| Tracing | Raindrop, optional, behind the `Trace` port (§ 25); package `raindrop-ai` | `null` / `jsonl` |
 | CLI | `typer` | `argparse` |
 | Tests | `pytest` | — |
 
@@ -226,7 +226,7 @@ Each decision's revisit trigger is the guard: ≥ `FIRE_MIN_RESIDUALS` attributa
 
 ### 7.1 Observer (`learn/observe.py`)
 
-For each miss, the observer (Haiku) writes an observation: `{noticed (1–3 sentences, no fix), surfaces{terms, collection, phrasing}, answer, figure, ratio, pipeline, retry_pipeline, retry_correct}`. It embeds `noticed` with `voyage-4`.
+For each miss, the observer (Haiku) writes an observation under the contract of § 23.1: `{noticed (1–3 sentences, no fix), surfaces{terms, collection, phrasing}, answer, figure, ratio, pipeline, retry_pipeline, retry_correct}`. It embeds `noticed` with `voyage-4`.
 
 **Noise filter:** before an observation reaches the episodic pass, the observer classifies the miss as `reducible` (a concept or definition) or `irreducible` (an execution error, an empty result, a wrong `answer_path`, malformed syntax). Irreducible observations are stored with `status: noise` and never join a shape.
 
@@ -251,7 +251,7 @@ For each miss, the observer (Haiku) writes an observation: `{noticed (1–3 sent
 | L4 backtest | § 7.4 | **dispositive** | admit, or refuse with the backtest record |
 | L5 owner port | an owner disposition on any draft or fire, through the CLI or the viewer | overrides L3–L4 | recorded as `disposer: owner` |
 
-Lens set (each paired with its counterfactual, phrased to refute where it adjudicates):
+Lens set (each paired with its counterfactual, phrased to refute where it adjudicates). § 23.2 holds the entry format and the corrected counterfactuals, and it governs where the two tables differ:
 
 | Lens | Question | Counterfactual |
 |---|---|---|
@@ -270,7 +270,8 @@ Combination: `score = σ(b + Σ wᵢ·logit(pᵢ))`. Seed weights live in `lens_
   - Sample at most `BACKTEST_N`, balanced between episodes scored correct and episodes scored as misses on their first attempt.
 - **Replay:** re-run the proposer on each sampled question with the decisions its episode record lists as consulted, plus the draft (minus the predecessor, for a supersede draft). Score against the episode's **confirmed figure**.
 - **Read:** `fixed` = a recorded miss whose replay matches the confirmed figure; `broken` = a recorded correct answer whose replay does not.
-- **Admit** when `fixed ≥ BACKTEST_MIN_FIXED ∧ broken ≤ BACKTEST_MAX_BROKEN`. Otherwise refuse.
+- **Read, held out:** `fixed_heldout` = the `fixed` episodes whose template is absent from the draft's sources (§ 24.2 L5).
+- **Admit** when `fixed ≥ BACKTEST_MIN_FIXED ∧ fixed_heldout ≥ BACKTEST_MIN_FIXED_HELDOUT ∧ broken ≤ BACKTEST_MAX_BROKEN`. Otherwise refuse.
 - Every backtest writes a `backtests` record, whatever the verdict: sampled episode ids, per-episode outcome, verdict.
 
 **Do:** score replays only against confirmed figures from the case store.
@@ -328,35 +329,85 @@ Registers and supporting ledgers:
 | Collection | Kind | Key fields |
 |---|---|---|
 | `drafts` | ledger | entry fields + `shape_id, source_observation_ids[], adjudication{L0..L4}, explore` |
-| `backtests` | ledger | `draft_id, sampled[{episode_id, original_correct, replay_correct}], fixed, broken, verdict` |
+| `backtests` | ledger | `draft_id, sampled[{episode_id, template, original_correct, replay_correct}], fixed, fixed_heldout, broken, verdict` |
 | `lens_weights` | register (versioned) | `version, weights{lens: w}, folds, bias, n_labels, auc_prequential, auc_ci` |
 | `tool_access` | register | `arm, logical → view, decision_id` |
 | `cursors` | register | `run_id, arm, next_idx, round` |
 | `rounds` | ledger | `round, idx_range, acc_stream, acc_self_assessed, acc_V?, store_sizes, admitted, refused, superseded, retired, fires, tokens_per_episode` |
 | `runs` | ledger | world, pack, seeds and every knob, written at run start |
-| `world_truth` | evaluation-only | pack definitions per `world_version`; readable only by `truth`, `metrics` and the authority |
+| `world_truth` | evaluation-only, in its own database `truth` | pack definitions per `world_version`; readable only by `truth`, `metrics` and the authority, enforced by database roles (§ 20.2) |
+| `terms`, `term_synonyms` | register | the term vocabulary and its Atlas Search synonyms mapping (§ 22.4) |
+| `leases` | register (TTL) | `run_id, arm, idx, worker, expires_at` (§ 20.2) |
+| `spend` | time series | one row per model call: `{arm, stage, model}`, tokens, latency, usd (§ 20.2) |
+| `lenses` | register (versioned) | the lens entries of § 23.2 |
 
 ### 10.2 Entry contract (`decisions` and `drafts`)
 
 ```
-{ _id, kind: taxonomic|procedural|floor|preference|context_policy,
-  payload: str,                                   # ≤ 60 words, a definition or procedure
+{ _id, title: str,                                # ≤ 12 words: the decided constraint, never the deliberation
+  kind: taxonomic|procedural|floor|preference|context_policy,
+  payload: str,                                   # ≤ 60 words, a definition or procedure, present tense
+  options: [{definition, figures_reproduced[], verdict: chosen|rejected, prior: bool}],
+                                                  # ≥ 2 rows, ≥ 1 rejected; the prior convention the
+                                                  # nominator ran first carries prior: true
+  forecloses: str,                                # the answers this decision moves away from
   latches: [
-    {type: "hook",    fires_when: {terms[], collections[], persona?}, not_this: [str]},
-    {type: "revisit", signature, guard: {min_residuals, window}, role: "dispositive"},
+    {type: "hook",    fires_when: {terms[], collections[], persona?},
+                      not_this: [{terms[], collections[], persona?, contrast: str}]},
+    {type: "revisit", id: "T-<decision_id>-<k>", signature, guard: {min_residuals, window},
+                      role: "dispositive", then: re-derive},
     {type: "floor",   collection, match: {…}},    # kind: floor only
-    {type: "retire",  moot_when: {idle_episodes}, max_fires},
-    {type: "wiring",  supersedes?: id}
+    {type: "retire",  id: "T-<decision_id>-<k>", moot_when: {idle_episodes}, max_fires, then: retire},
+    {type: "wiring",  supersedes?: id, converged_from?: [id], related?: [id], edges: [id]}
   ],
   residue: str,                                   # what enforcement does not check
-  warrant: {source_observation_ids[], templates: int, figures_reproduced[],
+  warrant: {source_observation_ids[], source_episode_ids[], templates: int, figures_reproduced[],
             falsifier: str, lens: {…}, lens_score, backtest_id},
-  lifecycle: {status: admitted|superseded|retired, superseded_by?, reason?, at_idx},
+  amendments: [{at_idx, clause, from, to, reached_by: fire_id|"owner", backtest_id?}],   # $push only
+  lifecycle: {status: admitted|superseded|converged|moot|retired, superseded_by?, converged_into?,
+              reason?, at_idx, seeded: bool},
   evidence_state: clear|contested,                # computed from open fires; never written by hand
-  embedding[1024] }
+  rep: {embedder_id, text_hash},                  # which representation produced `embedding` (§ 21)
+  embedding[d] }
 ```
 
 Each owed act has exactly one owning latch. A decision's falsifier is the join of its dispositive latches. The `falsifier` prose restates that join for a human reader; it is never evaluated.
+
+The entry carries the doctrine's pentad, each slot with its declared negative. No slot drops its negative silently; a negative names a concrete, instantiated case, never a bare negation (`not_this: anything else` bounds nothing).
+
+| Slot | Positive | Negative | Fields |
+|---|---|---|---|
+| Activation | the hook's `fires_when` | `not_this`, each row with keys plus a `contrast` sentence | `latches.hook` |
+| Payload | `title` + `payload` | `forecloses` + the rejected `options` | top level |
+| Warrant | anchors: source observations, episodes, `figures_reproduced` | `falsifier` and the revisit latches | `warrant`, `latches.revisit` |
+| Enforcement | the floor view (kind `floor`), the L0 gate | `residue` | `latches.floor`, `residue` |
+| Lifecycle | `status: admitted` + `at_idx` | `superseded_by` / `converged_into` / `moot_when` / `reason` | `lifecycle`, `latches.retire` |
+
+**Options.** The rejected option is the misstep the proposer takes without the decision. For a quirk-bearing shape it is the prior convention. The nominator runs it first through the world tool and records which source figures it fails to reproduce. That makes the prior trap a recorded, checkable row instead of prose.
+
+**Lifecycle states.** Each terminal state means one thing:
+- `superseded`: a successor reversed the payload; `superseded_by` names it.
+- `converged`: an L2 refine draft absorbed this decision with others into one; `converged_into` names it.
+- `moot`: the hook matched nothing for `RETIRE_IDLE` episodes. The shape stopped arriving, and nothing contradicted the decision. A moot decision never counts as a wrong decision in any readout.
+- `retired`: fires reached `RETIRE_FIRES` without a successor. It was contradicted and nothing replaced it.
+
+**Amend or supersede.** A change that reverses the payload is a successor (§ 7.5). A change that reaches the activation only (a hook widened or narrowed, a `not_this` row added, a guard retuned) is an **amendment**: a `$push` to `amendments`, carrying a backtest over the population whose consultation the change moves. Widening a hook is growth, not breakage, and never leaves a tombstone.
+
+**Frozen at admission.** After admission only `lifecycle`, `evidence_state` and `amendments` change. `store/decisions.py` exposes `admit`, `amend`, `supersede`, `converge`, `moot` and `retire`, and no other write path. A test asserts that no other module issues an update against `decisions`.
+
+**Seeded entries.** `lifecycle.seeded: true` marks a decision loaded from a seed set at run start (knob `SEED_DECISIONS`, default empty) rather than admitted in the run. An empty seed set is the first-class configuration.
+
+**Lineage edges.** `latches.wiring.edges` is the union of `supersedes`, `converged_from` and `related`. It is written once at admission and is the single `connectFromField` for `$graphLookup` (§ 17, pane 5).
+
+**L0 additions** (the floor gate, § 7.3), each a refusal:
+- every id under `warrant` resolves (`$lookup`, count equals list length); a dangling anchor is refused
+- `options` holds ≥ 1 rejected row
+- every `not_this` row carries ≥ 1 key and a non-empty `contrast`
+- the decision carries ≥ 1 revisit latch
+- the payload contains no number equal to a source observation's `answer` or `figure` (the mechanical floor under `case_leak`)
+- the hook's terms are in the term vocabulary, or arrive with the draft through the escape (§ 22.4)
+
+Residue of L0: it does not check that the payload is true, that a hook is a good recognition net, that a `contrast` names a real case, or that `forecloses` is complete.
 
 ### 10.3 Indexes
 
@@ -365,7 +416,7 @@ Each owed act has exactly one owning latch. A decision's falsifier is the join o
 
 ### 10.4 Resume
 
-- Workers claim indices from `cursors` atomically (`find_one_and_update`, `$inc`).
+- Workers claim indices from `cursors` atomically (`find_one_and_update`, `$inc`) and hold each in-flight index as a TTL `leases` row (§ 20.2).
 - On start, a run with an existing `run_id` resumes every arm from its cursor. In-flight indices without an `episodes` record are re-issued.
 - An episodic pass is idempotent per `(arm, round)`.
 
@@ -418,7 +469,7 @@ Pre-registered forecasts, written to `runs.forecasts` before the first episode a
 | 15:45–16:30 | **M6 story** | demo rehearsed on the replay; 1-minute video recorded; README states what was built on the day |
 | 16:30–17:00 | **Buffer + submit** | public repo, video, every field filled |
 
-Cut order if behind: § 9 → context policy → D2 → `self_ref` (the calibration gap is then read from `naive` alone, and § 0's claim 3 is reported as untested) → Raindrop. **Verify** in Discord at kickoff whether the RSI prize requires Raindrop; if it does, Raindrop moves to the end of the cut order.
+Cut order if behind: Part II post-event rows → § 9 → context policy → D2 → `self_ref` (the calibration gap is then read from `naive` alone, and § 0's claim 3 is reported as untested) → Raindrop. **Verify** in Discord at kickoff whether the RSI prize requires Raindrop; if it does, Raindrop moves to the end of the cut order.
 
 **Do:** run the engine where a sleeping laptop can't stop it (a cloud VM, or `caffeinate` with power attached).
 **Don't:** start a run without `run_id` resumption tested at M2.
@@ -428,7 +479,7 @@ Cut order if behind: § 9 → context policy → D2 → `self_ref` (the calibrat
 Stated so a reader of `gce/GCE-DOCTRINE.md` meets no unannounced contradiction.
 
 1. **The owner seat is held by a stand-in.** The doctrine's admission is owner-performed, and the world only contradicts. Here the stand-in adjudicator admits, and the backtest (the world's confirmed figures) is the dispositive authority. The owner remains a port (L5) that can override any disposition, and the demo exercises it once. Rationale: the demo shows a fully autonomous loop. The doctrine's ideal is a human.
-2. **Embeddings sit in the path for grouping observations into shapes, and for naive retrieval**, never in `governed` consultation, which is hook-keyed.
+2. **Embeddings sit in the path for grouping observations into shapes, for L2 routing, and for naive retrieval**, never in `governed` consultation, which is hook-keyed. The embedder is a port (§ 21), and non-embedding groupers are first-class (§ 24.1).
 3. **Supersession is whole-record**, not per-region. A drift that widens a set supersedes the decision that holds the set.
 4. **Lenses are independent of the proposer only approximately.** Jev differs in family from the proposer and the nominator but shares pretraining priors with them. The dispositive check is the backtest, never the lens panel.
 
@@ -442,7 +493,7 @@ Stated so a reader of `gce/GCE-DOCTRINE.md` meets no unannounced contradiction.
 
 ## 16. Knobs (seed values)
 
-This table seeds `engine/munchhausen/config.py`. Where the two differ, the config holds, and this table is not corrected to match.
+This table seeds `engine/munchhausen/config.py`, together with the Part II knobs listed at the end of § 24. Where the two differ, the config holds, and this table is not corrected to match.
 
 | Knob | Seed | Knob | Seed |
 |---|---|---|---|
@@ -485,7 +536,7 @@ The 1-minute video carries beats 1 and 2.
 
 ## 19. Before the event (no code)
 
-- Accept the Atlas Hackathon Sandbox invite. Confirm that Vector Search indexes can be created and that sample-data load works.
+- Accept the Atlas Hackathon Sandbox invite. Confirm that Vector Search indexes can be created and that sample-data load works. At kickoff, read the tier, `db.version()` (≥ 8.0 for `$rankFusion`, ≥ 8.2 for `$scoreFusion`), the search-index cap, `autoEmbed` availability and Agent Engine access, and write them to `runs.capabilities` (§ 20.1).
 - Keys:
   - Voyage, with a payment method on file
   - Anthropic
@@ -494,3 +545,325 @@ The 1-minute video carries beats 1 and 2.
 - Place the doctrine at `gce/GCE-DOCTRINE.md` and the schemas to import under `prior/`. The README cites both.
 - Install `uv`, Python 3.12 and Node LTS.
 - Ask in Discord `#rules`: is a pre-written design spec and a disclosed schema import acceptable, given that the code is written on the day?
+
+---
+
+# Part II — platform, seams and register
+
+Sections 20–25 extend Part I. Where a Part II row names a milestone, it lands inside that milestone's time box. A row marked **post-event** is an avenue, never a day-of commitment. The cut order in § 13 applies to Part II too, after § 9.
+
+## 20. Atlas surface map
+
+Atlas carries every store, every latch that can run as a query, and every event the loop reacts to. The rule: when a mechanism can execute as an Atlas primitive, it does, and the Python side holds only the parts with no Atlas form (LLM calls, clustering, logistic fits).
+
+### 20.1 Index budget
+
+The sandbox tier sets the number of search-type indexes. On M0 the cap is 3 indexes of any type, vector indexes included. Flex allows 10. **Verify** the sandbox tier, `db.version()` and the cap at M0.
+
+`store.setup()` creates indexes in this order and stops at the cap, logging every skipped index to `runs.capabilities`:
+
+| # | Index | Type | Collection | Serves |
+|---|---|---|---|---|
+| 1 | `decisions_vec` | vector (autoEmbed on `title + payload`, or 1024-d client vectors) | `decisions` | L2 neighbours, `naive`/`self_ref` retrieval, `why <term>` |
+| 2 | `observations_vec` | vector (client vectors) | `observations` | shape grouping (§ 7.2), novelty read (§ 24.1) |
+| 3 | `terms_search` | Atlas Search, `lucene.english`, synonyms mapping from `term_synonyms` | `terms` | term extraction for `hooks.match` (§ 20.3) |
+| 4 | `decisions_search` | Atlas Search on `title`, `payload`, hook terms | `decisions` | `$rankFusion` hybrid for `naive` and L2 |
+| 5 | `episodes_search` | Atlas Search on question text, `rationale`, `phrasing`; facets on `arm`, `template`, `correct` | `episodes` | viewer search, `$searchMeta` facet counts on the scrubber |
+| 6+ | `observations_vec__<embedder_id>` | vector | `observations` | representation arms (§ 24.1) |
+
+Premise: indexes 1–3 fit every tier. False if: the sandbox refuses a third index. In that case, `terms_search` falls back to the in-process extractor (§ 20.3), and `observations_vec` falls back to `numpy`.
+
+### 20.2 Feature map
+
+| Atlas feature | Where it carries Munchhausen | Store / § | Fallback | Milestone |
+|---|---|---|---|---|
+| `$vectorSearch` with pre-filters | neighbours filtered by `arm`, `lifecycle.status`, `kind`, `run_id`; `naive` top-k | `decisions` § 7.3 L2 | `numpy` cosine | M3 |
+| `$vectorSearch` `exact: true` (ENN) | backtest neighbour reads and any store under `EXACT_BELOW` records, so a replay is deterministic | § 7.4 | — | M3 |
+| Automated embedding (`autoEmbed`, voyage-4, GA) | `decisions` embed server-side and `$vectorSearch` takes the raw question text, so no client embedding runs on the consultation path of `naive`/`self_ref`. **Verify** that the sandbox offers it and whether the vector is readable back; clustering needs readable vectors, so `observations` keep client vectors unless it is | `decisions` | client Voyage | M2 |
+| `$rankFusion` (server ≥ 8.0) | hybrid lexical + vector retrieval for `naive`, and L2 routing; reported against plain vector top-k | § 5, § 7.3 | vector only | M3 if index 4 fits |
+| `$scoreFusion` (server ≥ 8.2) | same, with score-weighted fusion; a knob `FUSION=rank|score` | § 5 | `$rankFusion` | post-event |
+| Atlas Search synonyms | the term vocabulary compiles into a synonyms collection; question text → terms is one `$search` over `terms` | § 20.3, § 22.4 | in-process extractor | M2 |
+| `$searchMeta` facets | scrubber facets (episodes by arm × template × correct) | viewer § 17 | `$group` | M4 |
+| Views | floor decisions as tool access (exists, § 8) | `tool_access` | — | M2 |
+| Multi-document transactions | admission is atomic: insert successor, flip predecessor, dispose its fires, flip `tool_access`, close the draft | § 7.5, § 8 | ordered writes + idempotent repair on resume | M3 |
+| Change streams + resume tokens | the event bus. The episodic pass wakes on `rounds`; `lensfit` wakes on `backtests`; the viewer tails `fires`, `decisions` and `rounds`. Every consumer stores its resume token in `cursors`, so a killed consumer resumes without loss (problem statement 2) | `cursors` | polling every 2 s | M2 |
+| Pre- and post-images (`changeStreamPreAndPostImages`) | on `decisions` and `tool_access`, so the viewer shows each lifecycle flip and each view rewire as a before/after diff | viewer § 17 | re-read on event | M4 |
+| `$jsonSchema` validators | every store (exists, § 10.1) | all | — | M0 |
+| TTL index | `leases`: a worker's claim on an episode index expires after `LEASE_TTL_S`, so in-flight indices re-issue on resume without a scan | § 10.4 | the scan | M2 |
+| Time-series collection | `spend`: one row per model call, `metaField: {arm, stage, model}`, fields `tokens_in`, `tokens_out`, `latency_ms`, `usd`. Stage spend is a by-product of every call | new store | plain collection | M2 |
+| `$setWindowFields` | rolling stream accuracy, the calibration gap and drift-to-supersede latency, computed in Atlas over `episodes` | `metrics/` § 11 | `numpy` | M4 |
+| `$densify` / `$fill` | gap-free curves per arm across rounds | viewer | — | M4 |
+| `$merge` (on-demand materialized view) | `rounds` is written by a `$merge` pipeline over `episodes` at each round close, not by Python arithmetic | `rounds` | Python | M3 |
+| `$facet` + `$sample` | the backtest's balanced sample: one `$sample` branch over correct episodes and one over misses, in one aggregation | § 7.4 | Python sampling | M3 |
+| `$graphLookup` | lineage over `latches.wiring.edges` (exists, § 17) | `decisions` | — | M4 |
+| `$lookup` | L0 anchor resolution (§ 10.2); `why` joins | § 7.3 | — | M3 |
+| Multikey B-tree index on hook keys | `hooks.match` runs in Atlas: `{"latches.fires_when.terms": {$in: terms}}` plus the collection and persona keys, minus `not_this` rows, over a multikey index (§ 20.3) | `decisions` | Python match | M2 |
+| Database-scoped built-in roles | gold isolation enforced by Atlas, not by convention: `world_truth` moves to its own database `truth`. The learner's user holds `readWrite@munchhausen` and `read@world` only; the evaluator's user alone holds `read@truth`; `execute` runs as `read@world` | § 7.4 Don't | the convention | M0 |
+| MongoDB MCP Server (`--readOnly`) | the nominator's world query tool is the MCP server in read-only mode, connected as the `read@world` user, not a hand-written tool | § 7.2 | a `find`/`aggregate` tool in Python | M3 |
+| Atlas Agent Engine memory (public preview) | two ports (§ 21): `naive` backed by Agent Engine memory (exists as a stretch, § 5); and a **governed mirror** that publishes each admitted decision into Agent Engine procedural or taxonomic memory and withdraws it on supersession, moot or retirement. Any Agent-Engine agent then reads governed memory. **Verify** the Python SDK package and sandbox access | `MemorySink` | null sink | post-event, or M5 if verified at kickoff |
+| Atlas Charts (embedded) | optional side pane for the curves; never the main feature | viewer | Chart.js | post-event |
+
+Not used, each with its reason:
+- Atlas Triggers / Functions: App Services is at or near end of life; change streams cover the need.
+- Atlas Stream Processing: no free tier.
+- Online Archive and dedicated Search Nodes: M10+ only.
+- Queryable Encryption: no threat in the demo world that it answers.
+
+**Do:** let the demo name each Atlas primitive at the moment it acts: the view at the floor beat, the transaction at admission, the change stream at the fire, `$graphLookup` at `why`.
+**Don't:** add an Atlas feature that no beat or reading exercises; an unused feature is upkeep a judge can't see.
+
+### 20.3 Hook matching in Atlas
+
+1. **Term extraction:** `$search` over `terms` with the question text as the query and the `term_synonyms` mapping. Each hit is a term the question presents. The in-process fallback is longest-match over the same `terms` rows.
+2. **Match:** one aggregation over `decisions` filtered by `arm` and `lifecycle.status: admitted`. A hook matches when its `fires_when` keys intersect the question's keys and no `not_this` row's keys are all present.
+3. **Pack:** the matched decisions are ordered by `rerank-3` relevance and packed to `CONTEXT_BUDGET_TOKENS` (§ 6.2).
+
+The match itself is a query plan Atlas can explain (`explain()` in the viewer's `why`), which makes consultation inspectable down to the index used.
+
+## 21. Seams: ports
+
+Every optional surface sits behind a port: a Python `Protocol` in `munchhausen/ports/`, with implementations registered by name and chosen in `arms.yaml` or by knob. Selections are written to `runs.ports` at run start, and every reading names the ports it ran under.
+
+| Port | Abstracts | Implementations (default first) | Contract |
+|---|---|---|---|
+| `World` | dataset specifics: adapter, quirk pack, questions, authority | `sample_analytics` + `analytics-v1`; any adapter + pack | `build(db, seed)`, `schema_summary()`, `questions(seed)`, `authority(q, answer, idx)`. The engine imports no adapter module. |
+| `Truth` | gold, evaluation only | `pack_gold` | `gold(q, world_version)`. Importable only from `metrics/`, `world/authority` and tests; an import test fails any other importer. |
+| `Representation` | embedding vs non-embedding, and its version | `voyage-4`, `voyage-4-lite`, `atlas-autoembed`, `tfidf-online`, `signature`, `none` | `id`, `dim`, `embed(texts, role: observation|decision|query) -> ndarray | None`. Each vector is stamped `rep.embedder_id`. A record holds `emb.<embedder_id>`, so versions coexist and switching versions never re-embeds history in place. `tfidf-online` fits only on rows earlier than the one it embeds. |
+| `Similarity` | how neighbours are found | `atlas-vector`, `atlas-exact`, `atlas-hybrid`, `numpy`, `behavioural` | `knn(store, query, k, filter) -> [(id, score)]`. `behavioural` scores two decisions by the share of backtest episodes where both change the answer (§ 24.1 E6). |
+| `Grouper` | observations → shapes | `agglomerative`, `atlas-knn-graph`, `tfidf-blocks`, `signature-buckets`, `external` | `group(observations) -> [Shape]`. The coherence guard (§ 7.2) runs on every grouper's output. |
+| `Curator` | decision curation: what turns a draft into a decision | `governed` (L0–L5), `naive` (L0 → admit), `self_ref` (self-grade → admit), `hitl` (L0–L4, then owner required) | an ordered list of `Layer`s, each declaring `role: routing|corroborating|dispositive`. A curator with no dispositive layer is reported as ungoverned. |
+| `LensPanel` | the corroborating panel | `jev`, `claude`, `ridge-surrogate`, `none` | `score(draft, sources, neighbours) -> {lens: p}`. Reads only the fields its lens entries' `pointer` names (§ 23.2). |
+| `Store` | Atlas access | `atlas` | repositories per store, plus `capabilities()`: `vector_search`, `search_indexes_left`, `auto_embed`, `rank_fusion`, `score_fusion`, `change_streams`, `transactions`, `agent_engine`. No module outside `store/` imports `pymongo`, and an import test asserts it. |
+| `MemorySink` | the downstream memory product | `null`, `agent_engine` | `publish(decision)`, `withdraw(decision_id, reason)`. Called from the lifecycle functions only. |
+| `Trace` | observability | `null`, `jsonl`, `raindrop` | `begin(episode)`, `signal(name, value, comment?)`, `event(name, payload)`, `finish(output)`. Write-only; nothing on the learning path reads it. |
+| `SignalSource` | external read-back | `none`, `raindrop` | `shapes(since_idx) -> [Shape]`, handed to the `external` grouper. Corroborating only (§ 25). |
+| `Models` | LLM calls | `anthropic` | one function per party (proposer, observer, nominator, planted-map judge); model ids from config. |
+
+Port invariants:
+- Every port has an offline or null implementation, so the engine runs with no network beyond Atlas and Anthropic.
+- One interface test per port runs every registered implementation against the same fixture.
+- Trace invariance: a run under `Trace=raindrop` and the same run under `Trace=null` write byte-identical `decisions`, given the same seeds and model responses (replayed from `spend`'s response cache). False if: a module reads trace state.
+- Gold invariance: no implementation of any port except `Truth` reads the `truth` database. The database roles of § 20.2 enforce it.
+
+**Do:** add a dataset by writing an adapter and a pack, and a representation by registering one `Representation`.
+**Don't:** branch on a dataset name, an embedder name or `RAINDROP_WRITE_KEY` anywhere outside the port registry.
+
+## 22. The language doc: `corpus/LANGUAGE.md`
+
+`corpus/LANGUAGE.md` is the register of every sentence the system writes and every sentence written about it. It is created at M0 from § 2 and this section. From then on it is the one home of the lexicon, and § 2 is not maintained beside it. The world's term vocabulary is data in Atlas (§ 22.4). The markdown states that vocabulary's rules and never lists its rows.
+
+The doc has the sections below, in this order.
+
+### 22.1 Purpose
+
+It blocks three drifts, each paired with its countermeasure:
+- **Term drift:** a hook written in words the question never presents. The countermeasure is the shared vocabulary and the escape (§ 22.4).
+- **State narration:** a payload or observation that describes the run instead of the world. The countermeasure is the laws (§ 22.2).
+- **Claim drift:** a README or report sentence wider than the reading behind it. The countermeasure is the claim language (§ 22.6).
+
+### 22.2 The three laws
+
+Every directive ships as a Do plus its named overshoot (Don't).
+- **L1 Run-invariance.** No payload, hook, observation or lens names a run, an arm, an episode index, a party ("the agent", "I", "we") or a moment ("now", "recently", "this round"). A banned-tells table lists each tell with its legal replacement, and the lint's `TELLS` list is the authority.
+- **L2 State-invariance.** Every sentence in a record is a premise (it holds until named evidence falsifies it), a dated fact (it carries `at_idx` or an ISO date), or a directive. Records hold no prose about the past; the ledgers hold the past.
+- **L3 Bounded directives.** Every Do carries the overshoot it guards against, named as a recognizable case.
+
+### 22.3 Lexicon
+
+The closed vocabulary of § 2 (term | means | not to be confused with), extended by Part II: `port`, `representation`, `capability`, `amendment`, `moot`, `converged`, `lease`, `mirror`. A term outside the lexicon enters through the escape `other(<what>)` with a definition, then becomes usable.
+
+### 22.4 Term vocabulary (the world register)
+
+The vocabulary hooks key on. It lives in the `terms` collection: `{term, aliases[], source: schema|question|authority|nominator, admitted_at_idx, decision_id?}`. It compiles into the `term_synonyms` mapping that `terms_search` reads (§ 20.3).
+- A term is a lower-case noun phrase naming how a question **presents** ("active customers", "fiscal quarter", "revenue"), never a definition ("`st` in {2, 7}") and never a quirk id.
+- **Seeding:** from the adapter's schema summary (field and collection names) and noun phrases mined from the first `VOCAB_WARMUP` stream questions. It is never seeded from the pack. A test asserts that no pack id, definition string or transform parameter appears in `terms`.
+- **Growth:** the nominator proposes a missing term as `other(<term>): <presentation gloss>` inside a draft. The term is admitted with the draft and refused with it. An authority phrasing that names a concept adds an alias, never a term with a definition.
+- **No edits:** a term is never renamed. A better word becomes an alias of the old one.
+
+### 22.5 Voice by surface
+
+| Surface | Voice | Never |
+|---|---|---|
+| `title` | the constraint, ≤ 12 words, present tense | the deliberation, a figure |
+| `payload` | definition or procedure, present tense, names fields and values | a question's answer value, a run fact, hedges |
+| hook `fires_when` | lexicon and vocabulary terms in the words a question arrives in | the payload's conclusion |
+| `not_this.contrast` | one instantiated case the hook matches and must not bind | bare negation |
+| `falsifier`, trigger `when` | an observable event in the stores | a date, a feeling |
+| `residue` | what the enforcement does not check, named | "fully enforced" |
+| observation `noticed` | 1–3 sentences, present tense, the surface and the gap | a fix, a definition guess |
+| lens angle | an open question, reader-addressed, refuting where it adjudicates | first person, an expected answer |
+| lens counterfactual | the specific opposite error | "…or was it fine?" |
+| authority phrasing (pack-owned) | names the concept, never its definition | the definition |
+| README, report | a claim no wider than the reading, with n, interval and population | "always", "proves", an unscoped "learns" |
+
+### 22.6 The authoring register
+
+One register with two faces, kept apart:
+- **Latch language** (the key-space face): key on the presentation, bias broad, build from the vocabulary (§ 6.2's Do/Don't, owned here).
+- **Consultation language** (the proposer's prompt): presume the store ("apply each consulted decision whose hook matched"), and report count and provenance through `consulted[]`, never a bare assurance.
+- **Lens language** (the adjudicator's prompt): counterfactual pairing, refutation phrasing, stipulated certainty for generative lenses.
+
+A form on the wrong side is the failure. A presumed-existence phrasing on a lens manufactures agreement; a refutation phrasing in the proposer's prompt makes it doubt an admitted decision instead of applying it.
+
+### 22.7 Claim language
+
+For the README, the report and the demo voice-over:
+- A claim is no wider than its reading.
+- Every quantity carries a unit, a population and an n.
+- A forecast (§ 11) is printed beside its reading, and a disagreement stands as one.
+- Status words (admitted, superseded, moot) are the lifecycle values, never synonyms.
+
+### 22.8 Mechanical checks
+
+`munchhausen/lint_language.py` runs at L0 on every draft and on every observation write:
+- the banned tells
+- hook terms in vocabulary or escape
+- no source figure in the payload
+- a non-empty `contrast` on each `not_this` row
+- vacuous counterfactual patterns refused in `lenses.yaml` at load
+
+Residue, disclosed: the lint does not check that a payload is true, that a hook is a good net, or that a counterfactual names a real overshoot.
+
+## 23. Writing observations and lenses
+
+This section is the observer's and the lens author's contract. The observer prompt and `lenses.yaml` are compiled from it, and a human writing through the injection control or the owner port follows the same rules.
+
+### 23.1 Observations
+
+The record (amends § 7.1 and § 10.1):
+
+```
+{ episode_id,                       # the anchor; required. Chat and memory are no anchor.
+  via: observer|owner|injection|anomaly,   # provenance, never a class
+  class: reducible|irreducible,     # the noise filter (§ 7.1); the only write-time class
+  noticed: str,                     # 1–3 sentences
+  surfaces: {terms[], collection, fields[], phrasing},
+  answer, figure, ratio, delta, signature_guess?,
+  re_check_when?: {terms[], templates[]},  # an observable presentation the shape should recur on; omit if none
+  disposition: open|shaped|spent|noise|dropped|moot, disposed_by?,
+  rep: {embedder_id}, emb.<embedder_id>[] }
+```
+
+Rules:
+- **Noticing only.** `noticed` states the surface (the population, the field, the period) and the gap (answer against figure, as a ratio or delta). It never states a fix or a guessed definition. A fix is the nominator's act, after a shape clears the bar.
+- **Present tense, reader-addressed, run-invariant** (L1).
+- **Write blind.** The observer never reads other observations. Independent observations are what make a cluster evidence. An observation written after reading its neighbours reproduces them.
+- **Quote, don't conclude.** The authority's phrasing goes verbatim into `surfaces.phrasing`. `noticed` doesn't restate it as a finding.
+- **Classes come from recurrence.** The only class an observation carries at write time is the noise filter's. Shapes are assigned at the episodic pass, never by the observer.
+- **One noticing per record.** A miss touching two surfaces writes two observations, never one record that absorbs both.
+
+Examples over the `analytics-v1` world:
+
+| | `noticed` | Why |
+|---|---|---|
+| Bad | "The agent should exclude customers with `src: k7`." | a fix, and the definition leaks |
+| Bad | "Wrong answer on active customers." | no surface, no gap |
+| Bad | "We miscounted again this round." | L1 tells, no surface |
+| Good | "The count of customers for 2016 exceeds the figure by 3.1%. The pipeline counts every customer document. The phrasing names how active customers are counted." | surface, gap, quoted concept, no fix |
+| Good | "The quarterly sum for Q1 2015 differs from the figure by the sum of one calendar month of trades. The pipeline windows Q1 as January to March." | the gap's signature (one period's contribution), no fix |
+
+### 23.2 Lenses
+
+The lens entry format (`lenses.yaml`, mirrored to the `lenses` collection with a version on every change):
+
+```
+- id: generalizes
+  angle: str                  # the open question, present tense, impersonal
+  counterfactual: str         # the specific opposite error the angle steers into
+  product: noul|choice|score  # Jev output kind; levels: [...] for choice and score
+  pointer: [draft.payload, draft.latches.hook, sources.noticed, neighbours.payload]   # the state fields it reads
+  role: routing|corroborating # never dispositive
+  consumer: L3                # never the nominator or the proposer
+  counterfactual_anchor: draft_id|observation_id|seed   # where the overshoot was observed; `seed` is disclosed as unwarranted
+  phrasings: [str, str, str]  # for the hedging read (§ 24.2)
+  status: active|folded|reversed|dead|retired
+  warrant: [{lensfit_version, delta_logloss, auc_contribution}]   # effect evidence, appended by lensfit
+```
+
+Rules:
+- **Pair every angle with its counterfactual**, and make the counterfactual name the opposite error, recognizable in an answer. "…or was it fine?" is refused at load.
+- **Refute where you adjudicate.** Ask what reading would make the draft false and whether that reading was taken, never whether the draft is right.
+- **Never hand the lens its answer.** No expected verdict in the angle; no other lens's score, and no draft `lens_score`, in the state it reads.
+- **One proposition per lens.** A lens asking two things folds two signals into one probability, and `lensfit` can't separate them.
+- **Externality.** A lens's consumer is the adjudicator, never the party that wrote the draft.
+- **Warranted by supply.** A new lens is admitted only with a `counterfactual_anchor` naming an observed overshoot: a draft that L3 scored above threshold and the backtest refused, or the reverse. A lens authored from imagination stays `seed`, and the report says so.
+- **Few, clean lenses.** Keep the panel at about five. Do not prune it below five while the judge is weak (§ 24.2 L7).
+
+The seed panel replaces § 7.3's lens table, with corrected counterfactuals. Each counterfactual names an overshoot, never a yes/no question:
+
+| Lens | Angle | Counterfactual |
+|---|---|---|
+| `generalizes` | Which future questions, beyond the cited sources, does this decision change the answer to? | Name the source question it fits only by coincidence; a decision fitted to its sources answers none beyond them. |
+| `case_leak` (negative) | What reading would show the payload encodes one question's answer value rather than a definition? | Name the second question the payload answers correctly; a definition with no second question is an answer sheet. |
+| `org_fact` | What reading would show this is one persona's preference rather than an organizational definition? | Name the persona whose question this decision would answer wrongly at org scope. |
+| `contradicts_neighbor` | What reading would show this draft and a neighbour can't both hold? | Name the question both hooks match; without one, the contradiction is moot and routing it as supersede is the error. |
+| `mechanizable` (Choice: floor / taxonomic / procedural / preference / none) | Is the payload checkable as a `$match` predicate on one collection? | Name the question shape the predicate would wrongly filter. |
+
+**Lens minting** (post-event, the second-order loop's generative half): when `lensfit` reads a stable L3 false positive (above threshold, refused by backtest) on ≥ `LENS_MINT_MIN` drafts sharing a kind, the nominator drafts one lens whose `counterfactual_anchor` is those drafts. The new lens enters `status: active` at weight 0 and earns weight only through `lensfit`.
+
+## 24. Avenues: representations and lenses
+
+Each avenue is a port selection or a knob (§ 21) with the reading that settles it. All of them come from the author's prior project. Rows marked **day** fit inside § 13's milestones; the rest are post-event.
+
+### 24.1 Representation avenues
+
+| ID | Avenue | Arm or knob | Reading | When |
+|---|---|---|---|---|
+| E1 | Embeddings locate signal but recover identity. On templated text, clusters can track collection and template rather than concept. | `EMBED_MASK=none|surfaces`: embed `noticed` raw vs with collection, field and template tokens masked | ARI between the two partitions; shapes that survive masking | day |
+| E2 | On templated questions, TF-IDF blocks recover the templates, and residual signatures carry the concept with no text at all | `Grouper` = `agglomerative`(voyage-4) vs `tfidf-blocks` vs `signature-buckets` | share of shapes clearing `BAR_MIN_TEMPLATES`; quirk recall from `planted_map` | day (signature-buckets is cheap) |
+| E3 | Read a partition for stability before trusting it | sweep `CLUSTER_DISTANCE` ∈ {0.25, 0.35, 0.45}, and across `Representation`s | share of shapes persisting across settings (co-association) | post-event |
+| E4 | A shape formed from misses is selected on the outcome | pre-nominate direction read: the shape's hook over all matched episodes, hits included | miss rate inside vs outside the hook; refuse a shape with no gap | day (one aggregation) |
+| E5 | Miss triage has three kinds: noise, parameter, structure | add `class: parameter` (a constant ratio across all templates: a unit or scale miss) kept off the nominator | share of parameter-class misses; nominator spend saved | post-event |
+| E6 | Wording similarity does not predict answer similarity | `Similarity` for L2 = `atlas-vector`+`rerank-3` vs `behavioural` | duplicate and supersede routing agreement with backtest outcomes | post-event |
+| E7 | A learned surrogate is cheap where a zero-shot one is not | `LensPanel=ridge-surrogate`: ridge on the draft's embedding predicting the backtest verdict, as a pre-L3 screen | prequential AUC vs `jev` at equal n | post-event |
+| E8 | World shift shows as text novelty before it shows as cluster mass | an observation-novelty statistic (mean distance to the prior rounds' cluster centroids), read beside revisit fires | lead in episodes over the first dispositive fire after D1 and D2 | day if `observations_vec` fits |
+| E9 | Retrieval's lead lower-bounds what hooks miss | per-question lead of `naive` over `governed` on quirk-bearing questions | the share of misses where `naive` retrieved the right decision and no hook matched | day (a metrics query) |
+| E10 | A changed embedder reads as drift | pin `embedder_id` per run; a version change is a new `emb.<id>`, never an overwrite | — (an invariant) | day |
+
+### 24.2 Lens avenues
+
+| ID | Avenue | Arm or knob | Reading | When |
+|---|---|---|---|---|
+| L1 | A sign-blind dead-lens test can't tell dead from reversed | amend § 9: a lens whose fitted weight's sign is opposite its seed sign over 2 fits is `reversed` (dropped from the panel), distinct from `dead` | count of reversed vs dead lenses | day (in lensfit) |
+| L2 | Per-lens weights at n ≈ 20 are coin flips; set-grain readings resolve | report the panel's prequential AUC with its interval as the claim; per-lens weights advisory until the interval clears | a power read for `LENSFIT_MIN_LABELS` | day |
+| L3 | Collinear lenses each ablate as worthless | fold on ρ > `LENS_FOLD_RHO` **and** an entailment check by the nominator model; report the effective rank of the lens correlation matrix | effective rank; AUC lost to a fold | post-event |
+| L4 | One call answering all lenses shares a wording prior (answer echo) | `LENS_CALL_MODE=isolated|joint`, default `isolated` | inter-lens ρ under each mode, residualized on wording cosine | day |
+| L5 | `case_leak` is measured by a held-out stratum, not read from wording | the backtest reports `fixed_heldout`: fixes on templates absent from the sources. Admission needs `fixed_heldout ≥ BACKTEST_MIN_FIXED_HELDOUT` (seed 1) | case-leak drafts refused by held-out vs by the lens | day: a field on `backtests` |
+| L6 | Paraphrase agreement does not detect a bad lens; hedging does | log per-lens hedging, mean 4p(1−p), across the 3 phrasings | hedging per lens vs its `lensfit` contribution | day (logging) |
+| L7 | Five lenses hold the gain only on clean answers | keep ≥ 5 active lenses; fold only by L3's rule | — | invariant |
+| L8 | A seeded start saturates; an empty start widens room | `SEED_DECISIONS=empty|sme`: an SME-written seed set vs empty | drift-to-supersede latency and quirk recall per arm | post-event |
+| L9 | Lens-weight trajectories carry no runtime signal at small n | `lens_weights` versions are a log; no reading is claimed from their path | — | invariant |
+| L10 | `not_this` is authored only from observed `considered-not-applicable` dispositions | an amendment (§ 10.2) proposes a `not_this` row when a hook collects ≥ `NOT_THIS_MIN` considered-not-applicable dispositions on one key set | hook precision before vs after | post-event |
+| L11 | Optimism at admission is misread as later drift | read stale-applied rate (§ 11) only on episodes after `LABEL_HORIZON` from admission | — | invariant |
+
+New knobs, added to § 16: `EXACT_BELOW` 2000, `LEASE_TTL_S` 120, `VOCAB_WARMUP` 40, `EMBED_MASK` none, `LENS_CALL_MODE` isolated, `BACKTEST_MIN_FIXED_HELDOUT` 1, `SEED_DECISIONS` empty, `NOT_THIS_MIN` 3, `LENS_MINT_MIN` 4, `FUSION` rank.
+
+## 25. Raindrop (optional)
+
+Raindrop is a `Trace` and a `SignalSource` (§ 21), off unless `RAINDROP_WRITE_KEY` is set. The engine, the stores and every reading are identical with it off. With it on, the RSI story gets an external observer that grades the harness on signals the harness does not author.
+
+### 25.1 Write path (`Trace=raindrop`, SDK `raindrop-ai`)
+
+| Munchhausen event | Raindrop call | Fields |
+|---|---|---|
+| episode start | `begin(user_id=persona, event="episode", convo_id=f"{run_id}:{arm}")` | properties: `arm`, `template`, `idx`, `consulted` ids, `view_map` |
+| proposer output | `interaction.finish(output=answer)` with the pipeline as a code attachment | `confidence` as a property |
+| first-attempt score | `track_signal(name="correct", signal_type="feedback", sentiment=POSITIVE|NEGATIVE)` | — |
+| authority reply | `track_signal(name="authority_correction", signal_type="feedback", sentiment=NEGATIVE, comment=phrasing)` | the stakeholder's correction is the analogue of a user's frustration signal |
+| floor view applied | `track_signal(name="floor_filtered")` | decision id |
+| fire, admission, supersession, moot, retirement | `track_ai(event=<name>, input=draft or fire, output=verdict)` | lens answers and the backtest record as attachments |
+| model calls | `tracing_enabled=True` auto-instruments the Anthropic client | spans per party |
+
+Arms become Raindrop experiment variants through the `arm` property, so Raindrop's own experiment view compares `frozen`, `self_ref`, `naive` and `governed` on the same signals.
+
+### 25.2 Read path (`SignalSource=raindrop`, post-event or M5 stretch)
+
+- **Signals:** the Raindrop Query API (read key `RAINDROP_QUERY_KEY`) returns Raindrop's issue clusters over NEGATIVE-signal interactions since an index.
+- **Shapes:** each issue becomes a candidate `Shape` handed to the `external` grouper, carrying its member episode ids.
+- **Admission:** an external shape passes the same coherence guard, bar, nominator and L0–L4 as an internal one. It is corroborating input only. Raindrop never admits, refuses or fires.
+- **Reading:** agreement (ARI) between Raindrop's issues and the internal shapes over the same episodes. This is an outside check on the grouping, which the harness can't author.
+
+**Do:** treat Raindrop as an observer whose groupings the harness must earn admission for, like any other.
+**Don't:** let a Raindrop signal settle anything. A dispositive outside signal would make Raindrop the authority, and the backtest is the only authority over admission.
+
+Premise: the RSI prize does not require the read path. False if: the Discord answer at kickoff says the prize needs Raindrop to drive the improvement loop. In that case, § 25.2 moves to M5 and Raindrop leaves the cut order (§ 13).
