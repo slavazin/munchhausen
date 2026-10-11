@@ -1,7 +1,7 @@
 # Carry-forward — session state for the next implementer
 
 Written 2026-10-11 11:53 PDT, after M0. Amended 2026-10-11 12:21 PDT after the M0 adversarial review
-(`<workspace>/type-gce/REVIEW.md`, against `4764f2f`); § 3a lists what changed. Read this,
+(`the M0 review (external, not in this repo)`, against `4764f2f`); § 3a lists what changed. Read this,
 then `CLAUDE.md`, then the SPEC sections named under **Next**. `SPEC.md` is the design and holds wherever
 this file is silent. Where this file records a decision that departs from or resolves the spec, this file
 holds. Exception, once: the review changed the design itself, so the SPEC was amended to state the new
@@ -110,7 +110,7 @@ context policy → D2 → Raindrop. If the day runs short, build the minimum con
 - **Sample data is NOT loaded.** Only `admin/config/local` exist (~1 MB). Blocks M1.
   User action: Atlas → Clusters → `…` → Load Sample Dataset; then drop every sample DB except
   `sample_analytics` (SPEC § 3 storage premise, 80% threshold).
-- The original `.env` key `mongodb_mun_key` is not a driver URI. Purpose unknown
+- An unrelated `.env` key is not a driver URI and is not read by config
   (possibly an Atlas API key). Not read by config. Don't print it.
 
 ## 3. Binding decisions (made in M0; don't relitigate)
