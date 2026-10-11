@@ -128,9 +128,13 @@ class AtlasEpisodes(_Ledger[Episode]):
 class AtlasObservations(_Ledger[Observation]):
     model = Observation
 
-    async def open_for_pass(self, run_id: str, arm: str, *, since_round: int) -> list[Observation]:
-        cur = self._c.find({"run_id": run_id, "arm": arm, "disposition": ObservationDisposition.OPEN.value,
-                            "round": {"$gte": since_round}})
+    async def open_for_pass(self, run_id: str, arm: str, *, since_round: int,
+                            exclude_via: Sequence[str] = ("injection",)) -> list[Observation]:
+        q: Doc = {"run_id": run_id, "arm": arm, "disposition": ObservationDisposition.OPEN.value,
+                  "round": {"$gte": since_round}}
+        if exclude_via:
+            q["via"] = {"$nin": list(exclude_via)}
+        cur = self._c.find(q)
         return [Observation.model_validate(d) async for d in cur]
 
     async def dispose(self, ids: Sequence[str], disposition: ObservationDisposition, by: str) -> None:
@@ -345,7 +349,11 @@ class AtlasRuns:
 PLANTED_MAP = "planted_map"     # evaluation-only collection (S5); created on first write, no validator
 
 
-def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> Pipeline:
+INJECTION = "injection"   # Draft.source / Observation.via / spend meta.source of the injection beat (S6)
+
+
+def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int],
+                   inject_stage: str = "inject") -> Pipeline:
     """The round record, computed in Atlas and `$merge`d into `rounds` (SPEC § 20.2). Run over `episodes`.
 
     Populations: stream accuracy, self-assessed accuracy and the calibration gap over stream episodes with
@@ -353,7 +361,9 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
     V accuracy over `stream: "v"` episodes whose `v_at` (else `idx`) is in
     range; lifecycle counts from `drafts` of this round (admitted/refused) and from `decisions` whose
     `lifecycle.at_idx` is in range (superseded/moot/retired/converged); fires by role with `at_idx` in range;
-    `usd_cum` = the arm's spend so far, `usd` = `usd_cum` − the previous round's `usd_cum`."""
+    `usd_cum` = the arm's spend so far, `usd` = `usd_cum` − the previous round's `usd_cum`.
+    The injection beat is excluded throughout: drafts with `source: injection`, observations with
+    `via: injection`, spend with `meta.stage == inject_stage` (INJECT_STAGE) or `meta.source: injection`."""
     lo, hi = idx_range
     in_range = {"$gte": lo, "$lt": hi}
     is_stream = {"$eq": ["$stream", "stream"]}
@@ -383,7 +393,7 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
             "tokens_all": when(stream_in, {"$sum": {"$map": {"input": tok, "in": "$$this.v"}}}),
         }},
         {"$lookup": {"from": C.DRAFTS.value, "pipeline": [
-            {"$match": {"run_id": run_id, "arm": arm, "round": round_}},
+            {"$match": {"run_id": run_id, "arm": arm, "round": round_, "source": {"$ne": INJECTION}}},
             {"$group": {"_id": "$status", "n": {"$sum": 1}}}], "as": "drafts"}},
         {"$lookup": {"from": C.DECISIONS.value, "pipeline": [
             {"$match": {"run_id": run_id, "arm": arm, "lifecycle.at_idx": in_range}},
@@ -392,13 +402,14 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
             {"$match": {"run_id": run_id, "arm": arm, "lifecycle.status": "admitted"}},
             {"$count": "n"}], "as": "store_admitted"}},
         {"$lookup": {"from": C.OBSERVATIONS.value, "pipeline": [
-            {"$match": {"run_id": run_id, "arm": arm, "disposition": "open"}},
+            {"$match": {"run_id": run_id, "arm": arm, "disposition": "open", "via": {"$ne": INJECTION}}},
             {"$count": "n"}], "as": "store_open_obs"}},
         {"$lookup": {"from": C.FIRES.value, "pipeline": [
             {"$match": {"run_id": run_id, "arm": arm, "at_idx": in_range}},
             {"$group": {"_id": "$role", "n": {"$sum": 1}}}], "as": "fires"}},
         {"$lookup": {"from": C.SPEND.value, "pipeline": [
-            {"$match": {"meta.run_id": run_id, "meta.arm": arm}},
+            {"$match": {"meta.run_id": run_id, "meta.arm": arm, "meta.stage": {"$ne": inject_stage},
+                        "meta.source": {"$ne": INJECTION}}},
             {"$group": {"_id": None, "usd": {"$sum": "$usd"}}}], "as": "spend"}},
         {"$lookup": {"from": C.ROUNDS.value, "pipeline": [
             {"$match": {"run_id": run_id, "arm": arm, "round": round_ - 1}},

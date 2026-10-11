@@ -260,3 +260,58 @@ def backward_for(h: Any, arm: str) -> RoundHook:
         await lifecycle_for(h, arm).sweep(s.run_id, arm, hi)
 
     return hook
+
+
+# --- S6 seams (additive): the injection's nominator and the owner port (L5) --------------------------
+
+
+def nominator_for(h: Any, arm: str) -> Any:
+    """The arm's `learn/nominate.Nominator`, built exactly as `backward_for` builds it (same cache entry)."""
+    return _collaborator(h, arm, "nominator", "munchhausen.learn.nominate", "Nominator", _deps(h, arm))
+
+
+class OwnerRefused(ValueError):
+    """An owner disposition the port refuses (e.g. admitting a draft whose only evidence is injected)."""
+
+
+@dataclasses.dataclass
+class OwnerPort:
+    """L5 through the arm's Adjudicator. The arm comes from the record; `at_idx` from the arm's cursor."""
+
+    h: Any
+
+    async def _at_idx(self, run_id: str, arm: str) -> int:
+        cursor = await self.h.store.cursors.get(run_id, arm)
+        return 0 if cursor is None else cursor.next_idx
+
+    async def dispose_draft(self, draft_id: str, verdict: str, note: str) -> dict[str, Any]:
+        from munchhausen.domain.draft import Verdict
+        from munchhausen.domain.observation import Via
+
+        store = self.h.store
+        draft = await store.drafts.get(draft_id)
+        if draft is None:
+            raise OwnerRefused(f"unknown draft {draft_id}")
+        v = Verdict(verdict)
+        if v is Verdict.ADMIT:
+            sources = [await store.observations.get(o) for o in draft.source_observation_ids]
+            vias = {o.via for o in sources if o is not None}
+            if draft.source == Via.INJECTION.value or (vias and vias <= {Via.INJECTION}):
+                raise OwnerRefused(f"{draft_id}: every source is injected evidence; the owner may not admit it")
+        at_idx = await self._at_idx(draft.run_id, draft.arm)
+        record = await adjudicator_for(self.h, draft.arm).owner_dispose_draft(draft_id, v, at_idx, note)
+        return {"draft_id": draft_id, "verdict": v.value, "status": record.status.value, "at_idx": at_idx}
+
+    async def dispose_fire(self, fire_id: str, disposition: str, note: str) -> dict[str, Any]:
+        from munchhausen.domain.common import FireDisposition
+
+        fire = await self.h.store.fires.get(fire_id)
+        if fire is None:
+            raise OwnerRefused(f"unknown fire {fire_id}")
+        d = FireDisposition(disposition)
+        await adjudicator_for(self.h, fire.arm).owner_dispose_fire(fire_id, d, note)
+        return {"fire_id": fire_id, "disposition": d.value, "decision_id": fire.decision_id}
+
+
+def owner_port(h: Any) -> OwnerPort:
+    return OwnerPort(h)

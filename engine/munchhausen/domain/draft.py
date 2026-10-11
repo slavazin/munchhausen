@@ -87,3 +87,6 @@ class Draft(EntryContract, Record):
     # Every episode id the nominator was shown: the shape's own episodes plus the episodes behind the
     # neighbours' residuals. The backtest population excludes them, so the held-out read stays held out.
     nominator_seen_episode_ids: tuple[str, ...] = ()
+    # Where the draft's evidence came from: "stream" (the episodic pass) or "injection" (the operator's
+    # false-figure beat, `loop/inject.py`). Round records and the owner port read it (additive, S6).
+    source: str = "stream"

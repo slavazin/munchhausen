@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from munchhausen.loop.inject import InjectionRequest
+from munchhausen.loop.inject import InjectionRequest, capped_templates
 from munchhausen.metrics.paired import paired_difference
 from munchhausen_viewer.services import ViewerServices
 
@@ -136,6 +137,14 @@ def create_app(svc: ViewerServices | None = None) -> FastAPI:
 
     app = FastAPI(title="Munchhausen", lifespan=lifespan)
     app.state.bus, app.state.jobs = bus, jobs
+    if svc is not None:   # Host header check: a page on another origin cannot drive the engine via DNS rebinding
+        app.add_middleware(TrustedHostMiddleware,
+                           allowed_hosts=sorted({*svc.settings.viewer_allowed_hosts, svc.settings.viewer_host}))
+
+    def prune_jobs(limit: int) -> None:
+        done = [k for k, j in jobs.items() if j["status"] != "running"]
+        while len(jobs) >= limit and done:
+            jobs.pop(done.pop(0))
 
     def need() -> ViewerServices:
         if svc is None:
@@ -237,12 +246,27 @@ def create_app(svc: ViewerServices | None = None) -> FastAPI:
         arm = body.arm or v.default_arm
         if arm not in v.arms or not v.arms[arm].authority:
             raise HTTPException(400, f"arm {arm!r} receives no authority; injection needs one")
-        req = InjectionRequest(run_id=run_of(body.run), arm=arm, templates=tuple(body.templates),
-                               figure=body.figure, phrasing=body.phrasing,
-                               per_template=body.per_template or v.settings.inject_per_template)
+        run_id = run_of(body.run)
+        if run_id != v.settings.run_id:
+            raise HTTPException(400, f"injection writes only to the engine's run {v.settings.run_id!r} (RUN_ID), "
+                                     f"not {run_id!r}")
+        try:
+            templates = capped_templates(body.templates, v.settings.inject_max_templates)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        busy = [j for j in jobs.values() if j["status"] == "running" and j["key"] == (run_id, arm)]
+        if busy:
+            raise HTTPException(409, f"an injection is already running on {arm} (job {busy[0]['id']})")
+        prune_jobs(v.settings.viewer_max_jobs)
+        if len(jobs) >= v.settings.viewer_max_jobs:
+            raise HTTPException(429, "too many injections in flight")
         job_id = uuid.uuid4().hex[:10]
+        req = InjectionRequest(run_id=run_id, arm=arm, templates=templates, figure=body.figure,
+                               phrasing=body.phrasing, per_template=body.per_template or v.settings.inject_per_template,
+                               job_id=job_id)
         job: dict[str, Any] = {"id": job_id, "status": "running", "steps": [], "result": None, "error": None,
-                               "request": {"arm": arm, "templates": body.templates, "figure": body.figure,
+                               "key": (run_id, arm),
+                               "request": {"arm": arm, "templates": list(templates), "figure": body.figure,
                                            "phrasing": body.phrasing}}
         jobs[job_id] = job
 
@@ -262,13 +286,13 @@ def create_app(svc: ViewerServices | None = None) -> FastAPI:
             bus.publish("inject", {"job": job_id, "step": job["status"], "error": job["error"]})
 
         job["task"] = asyncio.create_task(go())
-        return {k: x for k, x in job.items() if k != "task"}
+        return {k: x for k, x in job.items() if k not in ("task", "key")}
 
     @app.get("/api/inject/{job_id}")
     async def inject_status(job_id: str) -> dict[str, Any]:
         if job_id not in jobs:
             raise HTTPException(404, "no such injection")
-        return {k: x for k, x in jobs[job_id].items() if k != "task"}
+        return {k: x for k, x in jobs[job_id].items() if k not in ("task", "key")}
 
     # --- L5 owner port -----------------------------------------------------------------------------
 
@@ -282,6 +306,8 @@ def create_app(svc: ViewerServices | None = None) -> FastAPI:
             return await fn(body.id, body.verdict, body.note)
         except NotImplementedError as e:
             raise HTTPException(501, str(e)) from e
+        except ValueError as e:   # the owner port refuses (e.g. admitting injected evidence)
+            raise HTTPException(409, str(e)) from e
 
     @app.post("/api/owner/draft")
     async def owner_draft(body: OwnerBody) -> dict[str, Any]:

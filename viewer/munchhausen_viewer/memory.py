@@ -145,8 +145,8 @@ class MemoryReadModel:
                 paired.append({"arm": arm, "idx": idx, "d": d, "diff": sum(x[1] for x in w) / len(w)})
         v: dict[tuple[str, int], list[int]] = {}
         for e in self._eps(run_id):
-            if e.stream == "v" and (at is None or e.idx <= at):
-                v.setdefault((e.arm, e.idx), []).append(int(e.correct))
+            if e.stream == "v" and e.v_at is not None and (at is None or e.v_at <= at):
+                v.setdefault((e.arm, e.v_at), []).append(int(e.correct))
         return {"rolling": rolling, "paired": paired, "reference": reference, "window": window,
                 "v": [{"arm": a, "idx": i, "acc": sum(x) / len(x), "n": len(x)} for (a, i), x in sorted(v.items())],
                 "rounds": [r.model_dump(mode="json") for r in self.sr.rounds
@@ -199,7 +199,7 @@ class MemoryReadModel:
     async def facets(self, run_id: str, *, at: int | None) -> list[Doc]:
         agg: dict[tuple[str, str, bool], int] = {}
         for e in self._eps(run_id):
-            if at is None or e.idx <= at:
+            if e.stream == "stream" and (at is None or e.idx <= at):
                 k = (e.arm, e.template, e.correct)
                 agg[k] = agg.get(k, 0) + 1
         return [{"arm": a, "template": t, "correct": c, "n": n} for (a, t, c), n in sorted(agg.items())]

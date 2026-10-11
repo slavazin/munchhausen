@@ -239,6 +239,12 @@ class Settings(BaseSettings):
     inject_seed: int = 101              # question instances for injection: never the stream's seed
     inject_per_template: int = 1        # questions per chosen template (≥ BAR_MIN_OBS in total)
     inject_scan_max: int = 5000         # questions scanned to find instances of the chosen templates
+    inject_idx_base: int = -1_000_000   # injection episodes take free idx <= this: far below V's -(1 + k*V_SIZE + j)
+    inject_max_templates: int = 3       # distinct templates per injection (cost: forward passes + 2*BACKTEST_N)
+    inject_stage: str = "inject"        # spend `meta.stage` of the injection's proposer calls; rounds exclude it
+    viewer_max_jobs: int = 20           # injection jobs kept in memory; the oldest finished are dropped
+    viewer_allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")   # Host header check (plus VIEWER_HOST)
+    viewer_allow_public: bool = False   # refuse binding a non-loopback address unless set
 
     # ------------------------------------------------------------------------------------------------
 
