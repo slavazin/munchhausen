@@ -141,6 +141,14 @@ organic stream.
 Run A naive 5, ungated 0, governed 5 (controls, hook overreach); Run B naive 4, ungated 8 (all P1), governed 0.
 Helped (right where frozen wrong): Run A ungated 204 / governed 158; Run B ungated 229 / governed 78.
 
+**Injection on ungated (16:20, same lie as governed's beat):** draft `run-a:ungated:r20:cc0cd339c4` "Active
+customers means any customer holding an account, not st-coded status" → L0 pass, bar pass, **admitted as
+`D-ee3167ef6f`** (no backtest). It now sits in ungated's run-a store; reports regenerated after 16:20 will count it
+in `lifecycle.ungated` (exported `docs/evidence/run-a` predates both injections). Deck v14 lie slide shows both.
+**V set (sealed, 40 q, last read idx 525; no command reads V on the end-of-run store):** Run A governed − frozen
++0.325 [+0.175, +0.475], ungated − frozen +0.550 [+0.425, +0.675], governed − ungated −0.225 [−0.350, −0.100];
+Run B +0.300 / +0.550 / −0.250 [−0.375, −0.100]. Scratchpad `vset.py` has the per-stratum table.
+
 **Run B** (adversarial authority) launched 15:17, DONE 15:54: `RUN_ID=run-b`, snapshot `60086e4` (`munch-run-b`),
 `AUTHORITY_POISON_RATE=0.20`, `CONF_DIR=<munch-run-b>/engine/conf/run-b` (forecasts F1–F7 registered; F2 = governed
 admits 0 N1-derived, naive and ungated ≥1; F7 = governed − ungated on controls after round 10), arms frozen, naive,
