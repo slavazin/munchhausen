@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from munchhausen.domain.arm import ArmSpec
@@ -109,7 +109,16 @@ class Settings(BaseSettings):
     fire_min_residuals: int = 2
     fire_window: int = 30
     # S2 (M2) forward pass, consultation and runtime sandbox
-    proposer_temperature: float = 0.0   # 0 reduces replay noise in the paired backtest; recorded in runs.knobs
+    # 0 reduces replay noise in the paired backtest; recorded in runs.knobs. None (PROPOSER_TEMPERATURE=none):
+    # not sent. Default None since the pilot gate raised PROPOSER_MODEL to claude-haiku-5-5, which refuses
+    # `temperature` (400 "deprecated for this model"); set 0 with claude-haiku-4-5.
+    proposer_temperature: float | None = None
+
+    @field_validator("proposer_temperature", mode="before")
+    @classmethod
+    def _temperature_none(cls, v: Any) -> Any:
+        return None if isinstance(v, str) and v.strip().lower() in {"", "none", "null"} else v
+
     proposer_max_tokens: int = 4000
     propose_attempts: int = 2           # proposer calls per episode before the episode records an error
     episode_attempts: int = 2           # runner re-runs of an episode that raised before leaving it orphaned
@@ -205,7 +214,7 @@ class Settings(BaseSettings):
     chartjs_url: str = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 
     # --- models --------------------------------------------------------------------------------------
-    proposer_model: str = "claude-haiku-4-5"
+    proposer_model: str = "claude-haiku-5-5"   # pilot gate 2026-10-11: haiku-4-5 failed controls (SPEC § 12 hedge)
     observer_model: str = "claude-haiku-4-5"
     nominator_model: str = "claude-sonnet-5-5"
     nominator_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
