@@ -156,8 +156,9 @@ class BacktestRun:
             "source_templates": sorted(bt.source_templates), "after_idx": self.population_after_idx,
             "calls": self.calls, "errors": self.errors or len(bt.errors), "applied": self.applied,
             "holdout_reserved": bt.holdout_reserved, "holdout_available": bt.holdout_available,
-            "hook_mismatch": self.hook_mismatch, "reason": self.reason or ("insufficient" if self.insufficient
-                                                                           else None),
+            "hook_mismatch": self.hook_mismatch,
+            "reason": self.reason or {BacktestVerdict.INSUFFICIENT: "insufficient",
+                                      BacktestVerdict.AWAITING_HELDOUT: "awaiting_heldout_template"}.get(bt.verdict),
             "reused": self.reused,
         }
 
@@ -231,7 +232,8 @@ class Backtester:
         errors = tuple(f"{r['episode_id']}: {r['error']}" for s, r in results if s is None)
         bt = Backtest.read(id=bid, run_id=draft.run_id, arm=draft.arm, draft_id=draft.id, sampled=samples,
                            source_templates=source_templates, thresholds=self.thresholds, errors=errors,
-                           at_idx=ctx.at_idx, holdout_reserved=reserved, holdout_available=available)
+                           at_idx=ctx.at_idx, holdout_reserved=reserved, holdout_available=available,
+                           holdout_fold=bool(draft.holdout_templates))
         await self.backtests.put(bt)
         run = BacktestRun(backtest=bt, population_after_idx=after_idx, calls=2 * len(sampled), errors=len(errors),
                           applied=sum(1 for r in replays if r.get("applied")), hook_mismatch=mismatch,
