@@ -23,6 +23,7 @@ import numpy as np
 
 from munchhausen.domain.arm import ArmSpec, ConsultationMode
 from munchhausen.domain.ids import decision_id as _decision_id
+from munchhausen.domain.registers import HARNESS_FAILURE_PREFIX
 from munchhausen.metrics.paired import PairedReading, difference_of_means, paired_difference
 
 Row = dict[str, Any]
@@ -46,6 +47,7 @@ class Reading:
     interval: tuple[float, float] | None = None
     level: float | None = None
     note: str | None = None
+    status: str | None = None          # e.g. `unread (proxy)`: the reading's value is withheld, not zero
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -135,7 +137,8 @@ def stream_curve(rows: Mapping[str, list[Row]], ctx: Context, arm: str) -> list[
         es = [e for e in by_round[r] if not errored(e)]
         acc = _mean([1.0 if e.get("correct") else 0.0 for e in es])
         conf = _mean([float(e.get("confidence", 0.0)) for e in es])
-        out.append({"round": r, "idx_lo": r * ctx.round_size, "idx_hi": (r + 1) * ctx.round_size - 1, "n": len(es),
+        hi = min((r + 1) * ctx.round_size - 1, max(e["idx"] for e in by_round[r]))   # never past the last index
+        out.append({"round": r, "idx_lo": r * ctx.round_size, "idx_hi": hi, "n": len(es),
                     "n_error": len(by_round[r]) - len(es), "acc": acc, "conf": conf, "gap": conf - acc})
     return out
 
@@ -154,15 +157,15 @@ def arm_summary(rows: Mapping[str, list[Row]], ctx: Context, arm: str) -> list[R
     all_ = stream_of(rows, arm)
     es = [e for e in all_ if not errored(e)]
     n, n_err = len(es), len(all_) - len(es)
-    pop = f"stream episodes of arm {arm} without error ({n_err} errored excluded)"
-    q = q_find("episodes", f"arm: '{arm}', stream: 'stream', error: null", "arm_summary")
+    pop = f"stream episodes of arm {arm} ({n_err} harness failures excluded)"
+    q = q_find("episodes", f"arm: '{arm}', stream: 'stream', error: {{$not: /^episode_failed/}}", "arm_summary")
     acc = _mean([1.0 if e.get("correct") else 0.0 for e in es])
     gap = _mean([_gap(e) for e in es])
     return [
         Reading(f"{arm}.stream_accuracy", acc, "accuracy (fraction)", pop, n, q),
         Reading(f"{arm}.calibration_gap", gap, "accuracy points (mean confidence − accuracy)", pop, n, q),
         Reading(f"{arm}.errored_episodes", n_err, "episodes", f"stream episodes of arm {arm}", len(all_),
-                q_find("episodes", f"arm: '{arm}', stream: 'stream', error: {{$ne: null}}", "arm_summary")),
+                q_find("episodes", f"arm: '{arm}', stream: 'stream', error: /^episode_failed/", "arm_summary")),
     ]
 
 
@@ -207,7 +210,8 @@ def paired_accuracy(rows: Mapping[str, list[Row]], ctx: Context, a: str, b: str,
         pop = f"stream questions with idx ≥ {after_idx}, paired by idx"
     xa, xb, _, drop = _pairs(rows, a, b, keep)
     pr = paired_difference(xa, xb, n_boot=ctx.bootstrap_n, level=ctx.ci_level, seed=ctx.seed)
-    return _paired_reading(f"paired_accuracy.{a}-{b}", pr, "accuracy (fraction)", pop + ", same question_id, no error",
+    return _paired_reading(f"paired_accuracy.{a}-{b}", pr, "accuracy (fraction)",
+                           pop + ", same question_id, no harness failure",
                            q_find("episodes", f"arm: {{$in: ['{a}', '{b}']}}, stream: 'stream'",
                                   f"paired_accuracy(a='{a}', b='{b}', after_round={after_round})"),
                            _drop_note(drop)), verdict3(pr, margin)
@@ -287,7 +291,8 @@ def drift_calibration(rows: Mapping[str, list[Row]], ctx: Context, *, drift: str
         held = ", ".join(d["_id"] for d in holders[arm])
         note = f"held: {held}. " + (dd or f"reference arm {reference} not read") + (
             ". PROXY: no planted map; every decision admitted before the drift counts as held" if proxy else "")
-        pop = (f"stream episodes of arm {arm} without error: idx {at - w}…{at - 1} (before) vs {at}…{stop - 1} "
+        pop = (f"stream episodes of arm {arm} (harness failures excluded): idx {at - w}…{at - 1} (before) "
+               f"vs {at}…{stop - 1} "
                f"(after); n = smaller window")
         r = _paired_reading(f"F1.{arm}", pr, "accuracy points (calibration gap, after − before)", pop,
                             q_find("episodes", f"arm: '{arm}', stream: 'stream', idx: {{$gte: {at - w}, $lt: {stop}}}",
@@ -543,13 +548,15 @@ def retrieval_lead(rows: Mapping[str, list[Row]], ctx: Context) -> list[Reading]
                 return not (e["matched_ids"] if "matched_ids" in e else e.get("consulted"))
 
             lead = [i for i in idx if right(es[i]) and unmatched(eh[i])]
-            notes = [n for n in (None if pm else "no planted map: any applied decision counts as the right one",
+            notes = [n for n in (None if pm else "unread (proxy): no planted map, so the right decision cannot be "
+                                 "identified and no share is claimed",
                                  "matched_ids absent on some episodes: consulted used" if fallback else None,
                                  _drop_note(drop)) if n]
-            out.append(Reading(f"E9.{s}-over-{h}", len(lead) / len(idx) if idx else None, "share of lead indices",
+            value = (len(lead) / len(idx) if idx else None) if pm else None
+            out.append(Reading(f"E9.{s}-over-{h}", value, "share of lead indices",
                                f"quirk-bearing stream indices where {h} missed and {s} hit", len(idx),
                                q_find("episodes", f"arm: {{$in: ['{s}', '{h}']}}, stream: 'stream'", "retrieval_lead"),
-                               note="; ".join(notes) or None))
+                               note="; ".join(notes) or None, status=None if pm else "unread (proxy)"))
     return out
 
 
@@ -695,11 +702,13 @@ def read_forecast(fid: str, entry: Mapping[str, Any], rows: Mapping[str, list[Ro
 
 
 def errored(e: Row) -> bool:
-    return bool(e.get("error"))
+    """A harness failure (`error` starts `HARNESS_FAILURE_PREFIX`): unscored and unpaired. Any other `error` is
+    the proposer's own failure, scored incorrect, and counts as a miss."""
+    return str(e.get("error") or "").startswith(HARNESS_FAILURE_PREFIX)
 
 
 def scored_of(rows: Mapping[str, list[Row]], arm: str) -> list[Row]:
-    """Stream episodes with no `error` (S2's `episode_failed` episodes are excluded from every rate)."""
+    """Stream episodes that are not harness failures (proposer execution errors stay in, as misses)."""
     return [e for e in stream_of(rows, arm) if not errored(e)]
 
 
@@ -719,7 +728,14 @@ def rolling_paired(rows: Mapping[str, list[Row]], ctx: Context, reference: str) 
         if arm == reference or not stream_of(rows, arm):
             continue
         pts = []
-        for end in range(ctx.round_size, ctx.run_length + 1, ctx.round_size):
+        common = {e["idx"] for e in stream_of(rows, arm)} & {e["idx"] for e in stream_of(rows, reference)}
+        if not common:
+            continue
+        last = max(common)                     # windows are never labelled past the run's last paired index
+        ends = list(range(ctx.round_size, last + 1, ctx.round_size))
+        if not ends or ends[-1] != last + 1:
+            ends.append(last + 1)
+        for end in ends:
             lo = max(0, end - w)
             xa, xb, _, _ = _pairs(rows, arm, reference, lambda e, lo=lo, end=end: lo <= e["idx"] < end)
             if not xa:

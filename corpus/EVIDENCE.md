@@ -40,8 +40,10 @@ registered forecasts hold. Re-registering means a new `RUN_ID` (Run A is a pilot
 
 - `episodes`: first attempt `correct`, `confidence`, `consulted[{decision_id, disposition}]` (proposer
   dispositions), `matched_ids` (what the consulter returned: hook-matched or retrieved; E9 reads it),
-  `view_map`, `template`, `question_id`, `error` (an errored episode is excluded from every rate and pair and
-  counted; `PipelineRefused…` counts as a guard refusal), `stream` (`stream` | `v` | `injection`), V episodes
+  `view_map`, `template`, `question_id`, `error`: only a harness failure (`error` starting `episode_failed`,
+  `HARNESS_FAILURE_PREFIX`) is excluded from rates and pairs and counted (`n_error`); any other `error` (empty
+  result, refused or unparsed pipeline, bad answer_path) is the proposer's wrong answer and counts as a miss;
+  `PipelineRefused…` also counts as a guard refusal), `stream` (`stream` | `v` | `injection`), V episodes
   carry their read point in `v_at`.
 - `decisions`: lifecycle; `admitted_at_idx` when S4 writes it (else the lifecycle index while admitted, else the
   end of its draft's round). Drift resolution = a held pre-drift decision `superseded` with its successor

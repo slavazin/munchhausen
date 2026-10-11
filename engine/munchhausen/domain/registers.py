@@ -67,7 +67,7 @@ class RoundRecord(Value):
     view_filtered: int = 0                    # stream episodes whose view_map rewired a collection
     tokens_in: int | None = None              # from `spend` rows attributed to the round's episodes; None: none
     tokens_out: int | None = None
-    n_error: int = 0                          # stream episodes with `error`: excluded from accuracy and gap
+    n_error: int = 0                          # harness failures (`episode_failed…`): excluded from rates
     usd: float = 0.0
     usd_per_episode: float | None = None
     usd_cum: float = 0.0                      # the arm's spend at round close (usd = usd_cum − previous usd_cum)
@@ -240,3 +240,9 @@ SIGNAL_AUTHORITY_CORRECTION = "authority_correction"  # value: the authority's f
 def catalogued(name: str) -> bool:
     return (name in TRACE_EVENTS or name.endswith(".failed") or name.startswith(("lifecycle.", "injection."))
             or name == "signal")
+
+
+# `error` prefix of a harness failure: an episode whose forward pass never completed (S2 writes it). Only these
+# are excluded from rates and pairs; any other `error` (empty result, refused or unparsed pipeline, bad
+# answer_path) is the proposer's wrong answer and counts as a miss.
+HARNESS_FAILURE_PREFIX = "episode_failed"
