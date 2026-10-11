@@ -134,3 +134,12 @@ def register(app: typer.Typer) -> None:
         from munchhausen.store.atlas import role_reach
 
         _echo(asyncio.run(role_reach(settings())))
+
+    @app.command("verify-roles")
+    def verify_roles_cmd() -> None:
+        """Probe each database role's allowed and forbidden operations live; `isolation: roles` only when
+        every cell matches SPEC § 20.2 and the four connections are distinct users."""
+        from munchhausen.config import settings
+        from munchhausen.store.atlas import verify_roles
+
+        _echo(asyncio.run(verify_roles(settings())))

@@ -1,8 +1,9 @@
 """Atlas connections, one client per database role (SPEC § 20.2 gold isolation).
 
-    learner   readWrite@munchhausen, read@world    — the engine's stores
+    admin     MONGODB_URI (cluster user)           — offline steps only: `setup`, `build-world`, kickoff
+    learner   readWrite@munchhausen + views on world (createCollection/dropCollection, no data writes)
     executor  read@world                           — proposer pipelines, the nominator's world tool
-    evaluator read@truth                           — the Truth implementation only
+    evaluator read@truth, read@world               — gold and the authority (evaluation side only)
 
 Until per-role users exist, every role falls back to MONGODB_URI and isolation holds by convention
 (and by the import test); the roles make it hold at the database.
@@ -36,7 +37,19 @@ class AtlasClients:
         return self.client("learner" if write else "executor")[self._settings.world_db]
 
     def source_db(self) -> AsyncDatabase[dict[str, Any]]:
-        return self.client("learner")[self._settings.source_db]
+        """The sample source is read only by the offline build and kickoff checks (admin)."""
+        return self.client("admin")[self._settings.source_db]
+
+    def world_build_db(self) -> AsyncDatabase[dict[str, Any]]:
+        """`world` with data-write rights: the offline build only (admin), never the learner."""
+        return self.client("admin")[self._settings.world_db]
+
+    def admin_store_db(self) -> AsyncDatabase[dict[str, Any]]:
+        """`munchhausen` as admin: `setup` needs collMod and search-index rights the learner lacks."""
+        return self.client("admin")[self._settings.store_db]
+
+    def evaluation_world_db(self) -> AsyncDatabase[dict[str, Any]]:
+        return self.client("evaluator")[self._settings.world_db]
 
     def truth_db(self) -> AsyncDatabase[dict[str, Any]]:
         """Handed to the Truth implementation by the composition root, and to nothing else."""

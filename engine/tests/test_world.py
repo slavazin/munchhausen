@@ -45,6 +45,9 @@ class FakeStore:
     def world_writer(self) -> MemoryDB:
         return self.wdb
 
+    def world_builder(self) -> MemoryDB:
+        return self.wdb
+
 
 # --- pack ---------------------------------------------------------------------------------------------
 

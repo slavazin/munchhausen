@@ -23,7 +23,7 @@ from munchhausen.domain.lens import LensEntry, LensWeights
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ENGINE_ROOT.parent
 
-Role = Literal["learner", "evaluator", "executor"]
+Role = Literal["learner", "evaluator", "executor", "admin"]
 AuthMode = Literal["api_key_workspace", "oauth_fallback", "oauth", "api_key", "none"]
 
 
@@ -303,7 +303,7 @@ class Settings(BaseSettings):
 
     def uri_for(self, role: Role) -> str:
         """Per-role connection string, falling back to MONGODB_URI (gold isolation, SPEC § 20.2)."""
-        specific = getattr(self, f"mongodb_uri_{role}")
+        specific = None if role == "admin" else getattr(self, f"mongodb_uri_{role}")   # admin = MONGODB_URI
         uri = specific or self.mongodb_uri
         if uri is None:
             raise RuntimeError("MONGODB_URI is not set (see .env.example)")

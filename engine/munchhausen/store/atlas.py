@@ -117,6 +117,66 @@ async def role_reach(settings: Settings) -> dict[str, Any]:
             "own_uri": own, "reach": reach}
 
 
+# What each role must and must not be able to do (SPEC § 20.2). `verify_roles` probes each cell live.
+ROLE_EXPECTATIONS: dict[str, dict[str, bool]] = {
+    "learner":   {"read_store": True,  "write_store": True,  "read_world": True,  "write_world": False,
+                  "view_world": True,  "read_truth": False},
+    "executor":  {"read_store": False, "write_store": False, "read_world": True,  "write_world": False,
+                  "view_world": False, "read_truth": False},
+    "evaluator": {"read_store": False, "write_store": False, "read_world": True,  "write_world": False,
+                  "view_world": False, "read_truth": True},
+}
+PROBE = "_role_probe"   # probe collection/view name; a permitted write is undone at once
+
+
+def _probe_calls(c: AsyncMongoClient[Doc], settings: Settings, role: str) -> dict[str, Any]:
+    store, world, truth = c[settings.store_db], c[settings.world_db], c[settings.truth_db]
+    return {
+        "read_store": lambda: store[PROBE].find_one({}),
+        "write_store": lambda: store[PROBE].insert_one({"_id": f"probe-{role}"}),
+        "read_world": lambda: world[PROBE].find_one({}),
+        "write_world": lambda: world[PROBE].insert_one({"_id": f"probe-{role}"}),
+        "view_world": lambda: world.create_collection(f"{PROBE}_view_{role}", viewOn=PROBE, pipeline=[]),
+        "read_truth": lambda: truth[PROBE].find_one({}),
+    }
+
+
+async def verify_roles(settings: Settings) -> dict[str, Any]:
+    """Probe every (role, capability) cell against Atlas and compare with `ROLE_EXPECTATIONS`.
+    Reads are `find_one`; writes insert one probe document (or create one probe view) and remove it at
+    once, through the admin connection if the role itself cannot. Returns presence only, never a URI."""
+    admin: AsyncMongoClient[Doc] = AsyncMongoClient(settings.uri_for("admin"), appname="munchhausen-probe-admin")
+    out: dict[str, Any] = {}
+    try:
+        for role, expect in ROLE_EXPECTATIONS.items():
+            c: AsyncMongoClient[Doc] = AsyncMongoClient(settings.uri_for(role), appname=f"munchhausen-probe-{role}")
+            probes = _probe_calls(c, settings, role)
+            cells: dict[str, Any] = {}
+            try:
+                for cap, call in probes.items():
+                    try:
+                        await call()
+                        got = True
+                    except OperationFailure:
+                        got = False
+                    cells[cap] = {"allowed": got, "expected": expect[cap], "ok": got == expect[cap]}
+            finally:
+                await c.close()
+            for db in (settings.store_db, settings.world_db):        # undo any permitted probe write
+                await admin[db][PROBE].delete_many({"_id": f"probe-{role}"})
+            if f"{PROBE}_view_{role}" in await admin[settings.world_db].list_collection_names():
+                await admin[settings.world_db].drop_collection(f"{PROBE}_view_{role}")
+            out[role] = cells
+        for db in (settings.store_db, settings.world_db):
+            if await admin[db][PROBE].count_documents({}) == 0:
+                await admin[db].drop_collection(PROBE)
+    finally:
+        await admin.close()
+    distinct = len({settings.uri_for(r) for r in (*ROLE_EXPECTATIONS, "admin")}) == len(ROLE_EXPECTATIONS) + 1
+    enforced = distinct and all(cell["ok"] for cells in out.values() for cell in cells.values())
+    return {"isolation": "roles" if enforced else "convention", "distinct_uris": distinct, "cells": out}
+
+
 def open_truth(settings: Settings, clients: AtlasClients) -> AtlasReader:
     """The `truth` database as the evaluator role. Called by the composition root only."""
     return AtlasReader(clients.truth_db())
@@ -140,7 +200,7 @@ class AtlasStore:
     def world_evaluation(self) -> AtlasReader:
         """S2: `world` for the evaluation side (gold, the authority): their reads are pack code, not
         model-written input, so they skip the sandbox and its row cap. Composition root only."""
-        return AtlasReader(self.clients.world_db(write=False))
+        return AtlasReader(self.clients.evaluation_world_db())
 
     def world(self) -> AtlasReader:
         """`world` as the executor role, behind the runtime sandbox (S2: `GuardedReader`)."""
@@ -148,13 +208,18 @@ class AtlasStore:
                              max_time_ms=self._s.pipeline_max_time_ms)
 
     def world_writer(self) -> AtlasWorldWriter:
+        """The learner's handle on `world`: floor views only (its role cannot write data)."""
         return AtlasWorldWriter(self.clients.world_db(write=True))
+
+    def world_builder(self) -> AtlasWorldWriter:
+        """The offline build's handle on `world` (admin role): `build-world` only."""
+        return AtlasWorldWriter(self.clients.world_build_db())
 
     def source(self) -> AtlasReader:
         return AtlasReader(self.clients.source_db())
 
     async def setup(self) -> dict[str, Any]:
-        return await _setup.setup(self._db, self._s)
+        return await _setup.setup(self.clients.admin_store_db(), self._s)
 
     async def ping(self) -> Doc:
         return await self.clients.client("learner").admin.command("ping")

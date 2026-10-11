@@ -391,8 +391,12 @@ class Store(Protocol):
         ...
 
     def world_writer(self) -> WorldWriter:
-        """The `world` database with write access: adapter build and floor views only. The `truth`
-        database is deliberately absent from this port; only the Truth implementation is handed it."""
+        """The `world` database for floor views (learner role: create/drop views, no data writes). The
+        `truth` database is deliberately absent from this port; only the Truth implementation is handed it."""
+        ...
+
+    def world_builder(self) -> WorldWriter:
+        """The `world` database with data-write access (admin role): the offline adapter build only."""
         ...
 
     async def capabilities(self) -> dict[str, Any]:

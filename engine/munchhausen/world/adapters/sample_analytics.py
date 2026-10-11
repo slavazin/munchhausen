@@ -116,7 +116,7 @@ class SampleAnalyticsAdapter:
 
     @classmethod
     def create(cls, name: str, settings: Any, store: Any) -> Self:
-        return cls(store.source(), store.world_writer(), settings.schema_sample_docs, settings.schema_max_depth,
+        return cls(store.source(), store.world_builder(), settings.schema_sample_docs, settings.schema_max_depth,
                    settings.execute_max_time_ms, value_fields=tuple(settings.schema_value_fields),
                    value_max=settings.schema_value_max, note_lowercase=settings.schema_note_lowercase)
 
