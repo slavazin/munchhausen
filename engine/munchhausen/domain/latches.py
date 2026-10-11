@@ -6,7 +6,7 @@ are tested against the same definition.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -110,3 +110,24 @@ class WiringLatch(Value):
 
 
 Latch = Annotated[HookLatch | RevisitLatch | FloorLatch | RetireLatch | WiringLatch, Field(discriminator="type")]
+
+
+def hook_reaches(hook: HookLatch, keys_list: Sequence[QuestionKeys]) -> list[int]:
+    """Indices of `keys_list` the hook does not match (`HookLatch.matches` is the one definition). A hook
+    must reach its own source questions: a `not_this` row whose keys those questions present blocks the
+    decision on the very shape it was drawn from."""
+    return [i for i, keys in enumerate(keys_list) if not hook.matches(keys)]
+
+
+def why_unreached(hook: HookLatch, keys: QuestionKeys) -> str:
+    """The reason one question's keys miss the hook: the persona scope, no shared key, or the binding
+    `not_this` row(s)."""
+    fw = hook.fires_when
+    if fw.persona is not None and fw.persona != keys.persona:
+        return f"persona scope {fw.persona!r} excludes persona {keys.persona!r}"
+    rows = [row for row in hook.not_this if row.all_present(keys)]
+    if rows:
+        return "; ".join(f"not_this row (terms={list(r.terms)}, collections={list(r.collections)}) binds"
+                         for r in rows)
+    return (f"no fires_when term or collection is present (question terms={sorted(keys.terms)}, "
+            f"collections={sorted(keys.collections)})")

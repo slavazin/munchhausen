@@ -41,8 +41,11 @@ from munchhausen.domain.latches import (
     RetireLatch,
     RevisitLatch,
     WiringLatch,
+    hook_reaches,
+    why_unreached,
 )
 from munchhausen.domain.pipeline_json import decode_dates, parse_pipeline
+from munchhausen.domain.question import QuestionKeys
 from munchhausen.domain.scoring import matches
 from munchhausen.impl.parties import LLM
 from munchhausen.lint_language import lint_draft_language
@@ -96,7 +99,9 @@ The entry contract:
   considered-not-applicable; a miss is silent. Never key the hook on the decision's own conclusion.
   Recover precision with not_this rows; each row carries keys plus a contrast: one instantiated case the
   hook matches and must not bind (e.g. "a count of customers by signup year, which counts every account
-  holder"), never a bare negation.
+  holder"), never a bare negation. A not_this row's keys must be ones the hook's own questions do NOT
+  present (the source questions above must all still match the hook); its contrast names a question that
+  lacks the decision's key concept.
 - A hook term outside the vocabulary enters only through new_terms as "other(<term>): <presentation gloss>".
 - revisit_signature: the residual signature a shift in the world would leave on this decision: set_member,
   ratio, date_offset, exclusion, threshold or rounding.
@@ -384,16 +389,20 @@ def contested_neighbours(inp: NominatorInput) -> set[str]:
     return {d.id for d in inp.neighbours if d.evidence_state is EvidenceState.CONTESTED}
 
 
+def build_hook(w: DraftWire) -> HookLatch:
+    return HookLatch(
+        fires_when=KeySet(terms=tuple(t.lower() for t in w.fires_when.terms),
+                          collections=tuple(w.fires_when.collections), persona=w.fires_when.persona),
+        not_this=tuple(NotThisRow(terms=tuple(t.lower() for t in r.terms), collections=tuple(r.collections),
+                                  persona=r.persona, contrast=r.contrast) for r in w.not_this))
+
+
 def build_entry(w: DraftWire, s: Session) -> EntryContract:
     st, shape = s.settings, s.inp.shape
     options = tuple(Option(definition=o.definition, figures_reproduced=s.reproduced_by(o.label),
                            verdict=o.verdict, prior=o.prior) for o in w.options)
     chosen = next((o for o in w.options if o.verdict == "chosen"), None)
-    hook = HookLatch(
-        fires_when=KeySet(terms=tuple(t.lower() for t in w.fires_when.terms),
-                          collections=tuple(w.fires_when.collections), persona=w.fires_when.persona),
-        not_this=tuple(NotThisRow(terms=tuple(t.lower() for t in r.terms), collections=tuple(r.collections),
-                                  persona=r.persona, contrast=r.contrast) for r in w.not_this))
+    hook = build_hook(w)
     latches: list[Any] = [
         hook,
         RevisitLatch(id=f"{PENDING}-{REVISIT_K}", signature=w.revisit_signature,
@@ -411,6 +420,18 @@ def build_entry(w: DraftWire, s: Session) -> EntryContract:
                       falsifier=w.falsifier)
     return EntryContract(title=w.title, kind=w.kind, payload=w.payload, options=options,
                          forecloses=w.forecloses, latches=tuple(latches), residue=w.residue, warrant=warrant)
+
+
+def unreached_sources(w: DraftWire, s: Session) -> list[str]:
+    """The hook must match every source question of its own shape (`hook_reaches`, the domain definition).
+    A source it misses is refused, naming the blocking `not_this` row or the missing key."""
+    hook = build_hook(w)
+    keys = [QuestionKeys(terms=frozenset(e.terms), collections=frozenset(e.collections or (e.collection,)),
+                         persona=e.persona) for e in s.inp.episodes]
+    return [f"the hook does not reach source episode {s.inp.episodes[i].id!r} "
+            f"({s.inp.episodes[i].text!r}): {why_unreached(hook, keys[i])}. A not_this row must use keys "
+            "the hook's own questions do not present"
+            for i in hook_reaches(hook, keys)]
 
 
 def submission_problems(w: DraftWire, s: Session) -> list[str]:
@@ -433,6 +454,7 @@ def submission_problems(w: DraftWire, s: Session) -> list[str]:
     shared = set(s.inp.shape.terms)
     if shared and not shared & {t.lower() for t in w.fires_when.terms}:
         out.append(f"key fires_when on the shape's shared terms: {sorted(shared)}")
+    out += unreached_sources(w, s)
     if w.supersedes is not None and w.supersedes not in contested_neighbours(s.inp):
         out.append(f"supersedes {w.supersedes!r} is not a contested neighbour; set it to null")
     if w.floor is not None:

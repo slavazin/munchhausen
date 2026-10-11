@@ -884,3 +884,40 @@ def test_settings_fill_unset_knobs() -> None:
                      nominator=None, adjudicator=None, round_size=30, settings=S)  # type: ignore[arg-type]
     assert (p.holdout_templates, p.direction_window, p.min_templates_floor) == (
         S.holdout_templates, S.direction_window, S.bar_min_templates_floor)
+
+
+# --- hook reaches its own sources (smoke-2) ----------------------------------------------------------
+
+
+def test_self_blocking_not_this_is_refused_and_a_clean_hook_is_accepted() -> None:
+    from munchhausen.domain.latches import hook_reaches
+    from munchhausen.domain.question import QuestionKeys
+
+    q = episode("r:a:e1").model_copy(update={
+        "text": "How many active customers were born in 1980 or later?",
+        "terms": ("active customers", "born", "customers"), "collections": ("customers",)})
+    members = [obs("o1", "r:a:e1"), obs("o2", "r:a:e2", template="t2")]
+    inp = NominatorInput(shape=shape_of(members), sources=members,
+                         episodes=[q, q.model_copy(update={"_id": "r:a:e2", "id": "r:a:e2"})],
+                         vocabulary=["active customers", "active", "born"], world=World())  # type: ignore[arg-type]
+    session = nominator_party.Session.open(S, inp)
+    for opt, flt in (("prior", "[]"), ("open", '[{"$match": {"status": "open"}}]')):
+        run(session.aggregate({"collection": "customers", "pipeline_json": flt, "answer_path": "0.n",
+                               "option": opt, "episode_id": "r:a:e1"}))
+    smoke2 = {**SUBMIT,
+              "fires_when": {"terms": ["active customers", "active", "active customers born",
+                                       "active customers hold"], "collections": ["customers", "accounts"],
+                             "persona": None},
+              "not_this": [{"terms": ["active customers", "born"], "collections": ["customers"], "persona": None,
+                            "contrast": "A count of all customers by birth year with no active qualifier"}],
+              "new_terms": ["other(active customers born): a count of active customers by birth year",
+                            "other(active customers hold): what active customers hold"]}
+    bad = nominator_party.DraftWire.model_validate(smoke2)
+    problems = nominator_party.submission_problems(bad, session)
+    unreached = [p for p in problems if "does not reach source episode" in p]
+    assert len(unreached) == 2 and "not_this row (terms=['active customers', 'born']" in unreached[0]
+    hook = nominator_party.build_hook(bad)
+    keys = QuestionKeys(terms=frozenset(q.terms), collections=frozenset(q.collections), persona=q.persona)
+    assert hook_reaches(hook, [keys]) == [0]
+    clean = nominator_party.DraftWire.model_validate({**smoke2, "not_this": SUBMIT["not_this"]})
+    assert nominator_party.submission_problems(clean, session) == []
