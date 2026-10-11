@@ -76,6 +76,13 @@ NULL_IMPLEMENTATION: dict[str, str] = {
     "signal_source": "none",
 }
 
+# S2 (M2): the settings key an implementation needs. Without it, the composition root selects the port's
+# NULL_IMPLEMENTATION and records the effective selection in `runs.ports` (no Voyage key → `none`/`identity`).
+REQUIRES_KEY: dict[str, dict[str, str]] = {
+    "representation": {"voyage-4": "voyage_api_key", "voyage-4-lite": "voyage_api_key"},
+    "reranker": {"rerank-3": "voyage_api_key", "rerank-3-lite": "voyage_api_key"},
+}
+
 
 class UnknownImplementation(KeyError):
     pass

@@ -8,6 +8,7 @@ from typing import Any, Self
 import numpy as np
 
 from munchhausen.config import Settings
+from munchhausen.domain.common import emb_key
 from munchhausen.ports.store import Store
 
 
@@ -31,7 +32,7 @@ class NumpySimilarity:
 
     @classmethod
     def create(cls, name: str, settings: Settings, store: Any = None) -> Self:
-        raise NotImplementedError("M2: loader over Store reads of emb.<embedder_id>")
+        return cls(store_loader(store, emb_key(settings.embed_model)))
 
     def __init__(self, load: Callable[[str, dict[str, Any]], Any]) -> None:
         self._load = load
@@ -47,3 +48,32 @@ class NumpySimilarity:
         sims = (mat @ q) / (np.linalg.norm(mat, axis=1) * np.linalg.norm(q) + 1e-9)
         top = np.argsort(-sims)[:k]
         return [(ids[i], float(sims[i])) for i in top]
+
+
+def store_loader(store: Store, key: str) -> Callable[[str, dict[str, Any]], Any]:
+    """(store name, filter) → (ids, matrix) over records holding `emb.<key>`, read through the Store port.
+    The filter's `run_id`/`arm` select the repository read; every other key is matched on the record."""
+
+    async def load(name: str, filter: dict[str, Any]) -> tuple[list[str], np.ndarray]:
+        run_id, arm = filter.get("run_id", ""), filter.get("arm", "")
+        reads = {"decisions": lambda: store.decisions.admitted(run_id, arm),
+                 "observations": lambda: store.observations.open_for_pass(run_id, arm, since_round=0)}
+        if name not in reads:
+            raise ValueError(f"numpy similarity has no loader for store {name!r}")
+        ids, rows = [], []
+        for rec in await reads[name]():
+            doc = rec.model_dump(mode="json", by_alias=True)
+            if all(_dig(doc, k) == v for k, v in filter.items() if k not in ("run_id", "arm")):
+                vec = rec.emb.get(key)
+                if vec:
+                    ids.append(rec.id)
+                    rows.append(vec)
+        return ids, (np.asarray(rows, dtype=np.float32) if rows else np.zeros((0, 0), dtype=np.float32))
+
+    return load
+
+
+def _dig(doc: Any, path: str) -> Any:
+    for part in path.split("."):
+        doc = doc.get(part) if isinstance(doc, dict) else None
+    return doc

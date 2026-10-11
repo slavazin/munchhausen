@@ -99,6 +99,19 @@ class Settings(BaseSettings):
     naive_merge_cosine: float = 0.92
     fire_min_residuals: int = 2
     fire_window: int = 30
+    # S2 (M2) forward pass, consultation and runtime sandbox
+    proposer_temperature: float = 0.0   # 0 reduces replay noise in the paired backtest; recorded in runs.knobs
+    proposer_max_tokens: int = 4000
+    propose_attempts: int = 2           # proposer calls per episode before the episode records an error
+    episode_attempts: int = 2           # runner re-runs of an episode that raised before leaving it orphaned
+    pipeline_row_cap: int = 5000        # sandbox: a world read past this many rows is refused
+    pipeline_max_time_ms: int = 10000   # sandbox: ceiling on any caller's maxTimeMS against `world`
+    vocab_min_questions: int = 2        # warmup questions that must present a noun phrase
+    vocab_max_phrase_tokens: int = 3    # longest noun phrase mined from warmup questions
+    terms_search_limit: int = 100       # candidate terms read from `terms_search` per text
+    fire_fetch_factor: int = 2          # consultations read per guard-window slot (V ones filtered)
+    rounding_unit_base: int = 10        # rounding signature: unit = largest power of this base dividing the figure
+    vocab_report_sample: int = 40       # terms printed by `seed-vocab`
 
     # --- backward pass -------------------------------------------------------------------------------
     round_size: int = 30

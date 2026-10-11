@@ -172,6 +172,10 @@ class LeaseRepository(Protocol):
         """Claimed indices with neither a live lease nor an episode: re-issued on resume (§ 10.4)."""
         ...
 
+    async def take_over(self, run_id: str, arm: str, idx: int, worker: str) -> bool:
+        """Acquire the lease on `idx` if it is free or its holder's TTL has passed (resume after a kill)."""
+        ...
+
 
 @runtime_checkable
 class ToolAccessRepository(Protocol):
@@ -186,6 +190,10 @@ class TermRepository(Protocol):
 
     async def extract(self, text: str) -> frozenset[str]:
         """Question text → presented terms (`$search` over `terms` with synonyms, § 20.3)."""
+        ...
+
+    async def compile_synonyms(self) -> int:
+        """Compile aliases into the `term_synonyms` mapping `terms_search` reads; returns the mapping count."""
         ...
 
 
