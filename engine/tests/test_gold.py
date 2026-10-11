@@ -81,13 +81,17 @@ CASES = [  # (template, persona, params, gold at v0, gold at v0+D1)
     ("sell_trades_year", "priya", {"year": 2010}, 2, 2),
     ("shares_sold_symbol_year", "priya", {"symbol": "msft", "year": 2010}, 105, 105),
     # P1: Dana on controls, rounded to the nearest thousand
-    ("avg_limit_product", "dana", {"product": "Commodity"}, 7000, 7000),
-    ("accounts_limit_at_least", "dana", {"limit_at_least": 9000}, 0, 0),
+    ("shares_sold_month", "priya", {"month": 1, "year": 2010}, 100, 100),
+    ("shares_sold_month", "dana", {"month": 4, "year": 2012}, 0, 0),
+    ("sell_trades_since", "priya", {"year_from": 2011}, 3, 3),
+    ("sell_trades_since", "dana", {"year_from": 2010}, 0, 0),
+    ("avg_limit_product", "dana", {"product": "Commodity"}, 7000, 7000),     # round_to on a non-integer
     # Q1: active ⇔ st ∈ {2, 7}; D1 adds 4
     ("active_born_from", "priya", {"born_from": 1965}, 1, 2),
     ("active_with_product", "priya", {"product": "Commodity"}, 1, 2),
     ("active_with_product", "priya", {"product": "Brokerage"}, 1, 1),
-    ("active_avg_accounts", "priya", {"born_before": 2000}, 1.5, 5 / 3),
+    ("active_accounts_held", "priya", {"born_before": 2000}, 3, 5),
+    ("active_accounts_held", "priya", {"born_before": 1980}, 3, 3),
     ("active_limit_total", "priya", {"product": "Commodity"}, 15000, 18000),
     # Q3: rs == 3 excluded; deleted_at is a decoy and those batches count
     ("buy_trades_year", "priya", {"year": 2010}, 1, 1),
@@ -140,4 +144,9 @@ async def test_poison_variants_differ_from_gold() -> None:
     q5 = BANK.pose("revenue_year", "priya", {"year": 2010})
     assert await GOLDS.variant(q5, V0, "Q5_revenue", {"factor": 1.0}) == pytest.approx(1099.5)
     q3 = BANK.pose("buy_trades_year", "priya", {"year": 2010})
-    assert await GOLDS.variant(q3, V0, "Q3_soft_delete", {"value": None}) == 2
+    assert await GOLDS.variant(q3, V0, "Q3_soft_delete", {"value": 2}) == 2       # b3 (rs 2) out, b2 in
+    q3b = BANK.pose("shares_bought_symbol", "priya", {"symbol": "aapl"})
+    assert await GOLDS.variant(q3b, V0, "Q3_soft_delete", {"value": 2}) == 0      # b3 is aapl's only buy
+    assert GOLDS.compute(q3b, V0, FIXTURE, convention=True) == 0                  # decoy honoured: b3 out
+    q1 = BANK.pose("active_born_from", "priya", {"born_from": 1960})
+    assert GOLDS.compute(q1, V0, FIXTURE, convention=True) == 4                   # every customer
