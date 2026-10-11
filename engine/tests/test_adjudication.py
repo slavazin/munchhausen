@@ -258,14 +258,14 @@ def test_l2_route_contested_knob_routes_a_new_draft_as_supersede() -> None:
 
 def test_floor_admission_creates_view_and_rewires_then_supersede_drops_and_restores() -> None:
     w = World()
-    floor = FloorLatch(collection="customers", match={"deleted_at": None})
-    d1 = draft("d-floor", "Customers exclude rows with deleted_at set.", w.sources, kind=DecisionKind.FLOOR,
+    floor = FloorLatch(collection="transactions", match={"rs": {"$ne": 3}})
+    d1 = draft("d-floor", "Transactions exclude batches whose rs field is 3.", w.sources, kind=DecisionKind.FLOOR,
                floor=floor)
     assert run(w.adjudicator().adjudicate(d1, w.ctx()))[-1].verdict is Verdict.ADMIT
     f1 = decision_id("d-floor")
-    view = f"customers__{f1}"
-    assert view in w.store.st.views and w.store.st.views[view][1] == [{"$match": {"deleted_at": None}}]
-    assert run(w.store.tool_access.view_map(RUN, ARM)) == {"customers": view}
+    view = f"transactions__{f1}"
+    assert view in w.store.st.views and w.store.st.views[view] == ("transactions", [{"$match": {"rs": {"$ne": 3}}}])
+    assert run(w.store.tool_access.view_map(RUN, ARM)) == {"transactions": view}
     # the predecessor is contested; a non-floor successor supersedes it: the view drops, the mapping restores
     f = fire(f1, 1)
     w.store.st.fires[f.id] = f
@@ -279,8 +279,8 @@ def test_floor_admission_creates_view_and_rewires_then_supersede_drops_and_resto
 
 def test_retire_drops_a_floor_view_and_sweep_moots_idle_decisions() -> None:
     w = World()
-    floor = FloorLatch(collection="customers", match={"deleted_at": None})
-    d1 = draft("d-floor", "Customers exclude rows with deleted_at set.", w.sources, kind=DecisionKind.FLOOR,
+    floor = FloorLatch(collection="transactions", match={"rs": {"$ne": 3}})
+    d1 = draft("d-floor", "Transactions exclude batches whose rs field is 3.", w.sources, kind=DecisionKind.FLOOR,
                floor=floor)
     run(w.adjudicator().adjudicate(d1, w.ctx(at_idx=10)))
     f1 = decision_id("d-floor")

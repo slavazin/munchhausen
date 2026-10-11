@@ -108,7 +108,10 @@ class AtlasDecisions:
         no_emb = [{"$project": {"emb": 0}}]
         pipeline = [
             {"$match": {"_id": decision_id}},
-            {"$graphLookup": {"from": C.DECISIONS.value, "startWith": "$latches.edges",
+            # `$latches.edges` over an array of latch subdocuments is an array of arrays; flatten it first
+            {"$graphLookup": {"from": C.DECISIONS.value,
+                              "startWith": {"$reduce": {"input": "$latches.edges", "initialValue": [],
+                                                        "in": {"$concatArrays": ["$$value", "$$this"]}}},
                               "connectFromField": "latches.edges", "connectToField": "_id",
                               "as": "lineage", "depthField": "depth"}},
             {"$lookup": {"from": C.DECISIONS.value, "localField": "_id", "foreignField": "latches.edges",

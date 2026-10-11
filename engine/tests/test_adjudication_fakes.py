@@ -285,13 +285,13 @@ class FakeTerms:
 
 class FakeWorld:
     """`world` as the replay sees it. A pipeline is `[{$project: {q, v}}]`; a floor (`$match` on
-    `deleted_at`, inline or through a view) returns the question's right figure."""
+    `rs`, inline or through a view) returns the question's right figure."""
 
     def __init__(self, st: State, right: dict[str, float]) -> None:
         self.st, self.right = st, right
 
     async def aggregate(self, collection: str, pipeline: list[dict[str, Any]], *, max_time_ms: int) -> list[dict]:
-        floored = collection in self.st.views or any("deleted_at" in s.get("$match", {}) for s in pipeline)
+        floored = collection in self.st.views or any("rs" in s.get("$match", {}) for s in pipeline)
         proj = next(s["$project"] for s in pipeline if "$project" in s)
         return [{"v": self.right[proj["q"]] if floored else proj["v"]}]
 
@@ -331,7 +331,7 @@ class FakeModels:
             consulted.append(Consultation(decision_id=d.id, disposition=Disposition.APPLIED if applied
                                           else Disposition.CONSIDERED_NOT_APPLICABLE))
         self.calls.append((inp.stage, q, tuple(d.id for d in inp.consulted)))
-        return Proposal(collection="customers", pipeline=[{"$project": {"q": q, "v": answer}}], answer_path="0.v",
+        return Proposal(collection="transactions", pipeline=[{"$project": {"q": q, "v": answer}}], answer_path="0.v",
                         consulted=tuple(consulted), confidence=0.5, rationale="r")
 
     async def self_grade(self, episode: Episode) -> SelfGrade:

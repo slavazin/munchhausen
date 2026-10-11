@@ -156,6 +156,8 @@ class Backtester:
     seed: int | None = None       # None: `$sample` (not replayable); else a seeded hash order
     concurrency: int = 4
     trace: Trace | None = None
+    question_of: Callable[[Episode], Question] = episode_question   # the episode's legible fields suffice; the
+    #                     composition root may point this at the world's id-based rebuild once the port has one
 
     async def run(self, draft: Draft, ctx: CurationContext) -> BacktestRun:
         bid = backtest_id(draft.id)
@@ -210,7 +212,7 @@ class Backtester:
 
     async def _pair(self, e: Episode, candidate: Decision, excluded: frozenset[str], view_map: dict[str, str],
                     sem: asyncio.Semaphore) -> tuple[BacktestSample | None, dict[str, Any]]:
-        question = episode_question(e)
+        question = self.question_of(e)
         async with sem:
             try:
                 _, consulted = await self.consulter.consult(e.run_id, e.arm, question)
