@@ -24,6 +24,7 @@ ENGINE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ENGINE_ROOT.parent
 
 Role = Literal["learner", "evaluator", "executor"]
+AuthMode = Literal["api_key_workspace", "oauth_fallback", "oauth", "api_key", "none"]
 
 
 class Settings(BaseSettings):
@@ -158,6 +159,23 @@ class Settings(BaseSettings):
     # --- readings ------------------------------------------------------------------------------------
     bootstrap_n: int = 2000             # resamples for paired arm differences
     ci_level: float = 0.90              # interval level for every paired difference and forecast verdict
+    readings_seed: int = 17             # bootstrap seed for every reading (a report re-derives byte-identically)
+    drift_window: int = 150             # F1: episodes before and after a drift index read for the gap
+    backtest_premise_first: int = 10    # § 12 premise: the first N backtests per arm
+    backtest_premise_share: float = 0.5 # § 12 premise: share of encoded misses the replay must fix
+    # USD per million tokens, per model id (Anthropic first-party list prices, read 2026-10-11).
+    # cache_write is the 5-minute write rate (1.25 × input). A model missing here is priced at 0 and the
+    # report says so (`unpriced_models`).
+    model_prices_usd_per_mtok: dict[str, dict[str, float]] = {
+        "claude-haiku-4-5": {"in": 1.0, "out": 5.0, "cache_read": 0.10, "cache_write": 1.25},
+        "claude-haiku-5-5": {"in": 0.10, "out": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+        "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_read": 0.20, "cache_write": 2.50},
+        "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_read": 0.20, "cache_write": 5.0},
+    }
+    response_cache: bool = False        # cache parsed model responses under var/cache/ (trace-invariance replay)
+    planted_map_concurrency: int = 4    # concurrent planted-map judge calls (evaluation only)
+    anthropic_oauth_beta: str = "oauth-2025-04-20"   # beta header sent when authenticating with an OAuth token
+    chartjs_url: str = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 
     # --- models --------------------------------------------------------------------------------------
     proposer_model: str = "claude-haiku-4-5"
@@ -231,6 +249,41 @@ class Settings(BaseSettings):
 
     def pack_path(self, name: str | None = None) -> Path:
         return self.packs_dir / f"{name or self.world_pack}.yaml"
+
+    def usd(self, model: str, tokens_in: int, tokens_out: int, cache_read: int = 0, cache_write: int = 0) -> float:
+        """List-price USD of one call from `MODEL_PRICES_USD_PER_MTOK`; 0 for an unpriced model."""
+        p = self.model_prices_usd_per_mtok.get(model)
+        if p is None:
+            return 0.0
+        return (tokens_in * p["in"] + tokens_out * p["out"] + cache_read * p.get("cache_read", 0.0)
+                + cache_write * p.get("cache_write", 0.0)) / 1e6
+
+    def isolation(self) -> Literal["roles", "convention"]:
+        """`roles` iff every per-role Atlas URI is set (SPEC § 20.2); otherwise gold isolation is by convention."""
+        roles = (self.mongodb_uri_learner, self.mongodb_uri_evaluator, self.mongodb_uri_executor)
+        return "roles" if all(r is not None for r in roles) else "convention"
+
+    def keys_present(self) -> dict[str, bool]:
+        """Presence of every secret knob. Never a value."""
+        secrets = [k for k, f in type(self).model_fields.items() if "SecretStr" in str(f.annotation)]
+        return {k: getattr(self, k) is not None for k in secrets}
+
+    def anthropic_auth_mode(self) -> AuthMode:
+        """Which credential the Anthropic client uses (recorded in `runs`, never a value):
+        `api_key_workspace` — API key with `ANTHROPIC_WORKSPACE_ID` (an org-level key needs the header);
+        `oauth_fallback` — an API key is present but no workspace id, so the OAuth token is used;
+        `oauth` — only the token; `api_key` — a key with neither workspace id nor token; `none`."""
+        key_, token = self.anthropic_api_key is not None, self.anthropic_auth_token is not None
+        if key_ and self.anthropic_workspace_id:
+            return "api_key_workspace"
+        if key_ and token:
+            return "oauth_fallback"
+        if token:
+            return "oauth"
+        return "api_key" if key_ else "none"
+
+    def model_ids(self) -> dict[str, str]:
+        return {k: v for k, v in self.knobs().items() if k.endswith("_model") and isinstance(v, str)}
 
 
 def _yaml(path: Path) -> dict[str, Any]:

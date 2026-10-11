@@ -8,9 +8,12 @@ Effort is sent only where configured — Haiku 4.5 rejects `effort`.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import sys
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Self, TypeVar
 
 from pydantic import BaseModel, Field
@@ -57,8 +60,7 @@ class AnthropicModels:
     def __init__(self, settings: Settings, spend: SpendRepository | None = None) -> None:
         from anthropic import AsyncAnthropic
 
-        self.client = AsyncAnthropic(api_key=key(settings, "anthropic_api_key"),
-                                      max_retries=settings.model_max_retries)
+        self.client = AsyncAnthropic(**client_kwargs(settings))
         self._s = settings
         self._spend = spend
 
@@ -86,25 +88,108 @@ class AnthropicModels:
 
     async def parse(self, *, stage: str, arm: str, model: str, system: str, user: str, wire: type[W],
                      effort: str | None = None, max_tokens: int = 16000) -> W:
+        """One structured call. Every call writes a `spend` row — a failed call too (`ok=False`, the
+        exception class), so failures are evidence. With `RESPONSE_CACHE`, a hit returns the stored parsed
+        output and writes a zero-token row with `request_id="cache"` (trace-invariance replay, SPEC § 21)."""
+        cache = self._cache_path(model, system, user, wire) if self._s.response_cache else None
+        if cache is not None and cache.exists():
+            out = wire.model_validate_json(cache.read_text())
+            await self._record(stage=stage, arm=arm, model=model, usage=None, latency_ms=0, system=system,
+                               request_id="cache")
+            return out
         kwargs: dict[str, Any] = {}
         if effort:
             kwargs["output_config"] = {"effort": effort}
         t0 = time.monotonic()
-        msg = await self.client.messages.parse(
-            model=model, max_tokens=max_tokens, system=system,
-            messages=[{"role": "user", "content": user}], output_format=wire, **kwargs)
+        try:
+            msg = await self.client.messages.parse(
+                model=model, max_tokens=max_tokens, system=system,
+                messages=[{"role": "user", "content": user}], output_format=wire, **kwargs)
+        except Exception as e:
+            await self._record(stage=stage, arm=arm, model=model, usage=None,
+                               latency_ms=int((time.monotonic() - t0) * 1000), system=system, error=e)
+            raise
+        latency = int((time.monotonic() - t0) * 1000)
+        request_id = getattr(msg, "_request_id", None)
         if msg.stop_reason == "refusal" or msg.parsed_output is None:
-            raise RuntimeError(f"{stage}: no parsed output (stop_reason={msg.stop_reason})")
-        if self._spend is not None:
-            await self._spend.record(SpendRow(
-                at=datetime.now(UTC), meta={"arm": arm, "stage": stage, "model": model},
-                tokens_in=msg.usage.input_tokens, tokens_out=msg.usage.output_tokens,
-                latency_ms=int((time.monotonic() - t0) * 1000), usd=0.0))
+            err = RuntimeError(f"{stage}: no parsed output (stop_reason={msg.stop_reason})")
+            await self._record(stage=stage, arm=arm, model=model, usage=msg.usage, latency_ms=latency,
+                               system=system, request_id=request_id, error=err)
+            raise err
+        await self._record(stage=stage, arm=arm, model=model, usage=msg.usage, latency_ms=latency, system=system,
+                           request_id=request_id, served_model=getattr(msg, "model", None))
+        if cache is not None:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(msg.parsed_output.model_dump_json())
         return msg.parsed_output
 
     async def record_call(self, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int,
-                          system: str = "", request_id: str | None = None) -> None:
-        if self._spend is not None:
-            await self._spend.record(SpendRow(
-                at=datetime.now(UTC), meta={"arm": arm, "stage": stage, "model": model},
-                tokens_in=usage.input_tokens, tokens_out=usage.output_tokens, latency_ms=latency_ms, usd=0.0))
+                          system: str = "", request_id: str | None = None, served_model: str | None = None) -> None:
+        await self._record(stage=stage, arm=arm, model=model, usage=usage, latency_ms=latency_ms, system=system,
+                           request_id=request_id, served_model=served_model)
+
+    async def record_error(self, *, stage: str, arm: str, model: str, error: BaseException, latency_ms: int,
+                           system: str = "") -> None:
+        """For parties that call `client` directly: record a failed call like `parse` does."""
+        await self._record(stage=stage, arm=arm, model=model, usage=None, latency_ms=latency_ms, system=system,
+                           error=error)
+
+    async def _record(self, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int, system: str,
+                      request_id: str | None = None, error: BaseException | None = None,
+                      served_model: str | None = None) -> None:
+        if self._spend is None:
+            return
+        row = spend_row(self._s, stage=stage, arm=arm, model=model, usage=usage, latency_ms=latency_ms,
+                        system=system, request_id=request_id, error=error, served_model=served_model)
+        try:
+            await self._spend.record(row)
+        except Exception as e:   # a lost spend row must not fail the episode; it is reported, not hidden
+            print(f"[spend] row not written ({type(e).__name__}): {stage} {arm} {model}", file=sys.stderr)
+
+    def _cache_path(self, model: str, system: str, user: str, wire: type[BaseModel]) -> Path:
+        h = hashlib.sha256("\x1f".join((model, wire.__name__, system, user)).encode()).hexdigest()
+        return self._s.var_dir / "cache" / f"{h}.json"
+
+
+def client_kwargs(settings: Settings) -> dict[str, Any]:
+    """Per `Settings.anthropic_auth_mode()`: an API key with its workspace header; else the OAuth token with its
+    beta header (`ANTHROPIC_OAUTH_BETA`), also when a key is present without a workspace id (recorded as
+    `oauth_fallback` in `runs`); else the bare key."""
+    mode = settings.anthropic_auth_mode()
+    if mode == "api_key_workspace":
+        return {"api_key": key(settings, "anthropic_api_key"),
+                "default_headers": {"anthropic-workspace-id": settings.anthropic_workspace_id},
+                "max_retries": settings.model_max_retries}
+    if mode in ("oauth", "oauth_fallback"):
+        return {"api_key": None, "auth_token": key(settings, "anthropic_auth_token"),
+                "default_headers": {"anthropic-beta": settings.anthropic_oauth_beta},
+                "max_retries": settings.model_max_retries}
+    return {"api_key": key(settings, "anthropic_api_key"), "max_retries": settings.model_max_retries}
+
+
+def error_label(error: BaseException) -> str:
+    """Exception class, plus the HTTP status when the SDK carries one (e.g. `RateLimitError(429)`)."""
+    status = getattr(error, "status_code", None)
+    return f"{type(error).__name__}({status})" if status is not None else type(error).__name__
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def spend_row(settings: Settings, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int, system: str,
+              request_id: str | None = None, error: BaseException | None = None,
+              served_model: str | None = None) -> SpendRow:
+    """The `spend` row of one call (pure): tokens incl. cache, list-price USD, prompt hash, request id."""
+    t_in = int(getattr(usage, "input_tokens", 0) or 0)
+    t_out = int(getattr(usage, "output_tokens", 0) or 0)
+    c_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    c_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    return SpendRow(
+        at=datetime.now(UTC), meta={"run_id": settings.run_id, "arm": arm, "stage": stage, "model": model},
+        tokens_in=t_in, tokens_out=t_out, latency_ms=latency_ms,
+        usd=settings.usd(model, t_in, t_out, c_read, c_write),
+        tokens_cache_read=c_read, tokens_cache_write=c_write,
+        prompt_hash=sha256(system) if system else None, request_id=request_id,
+        ok=error is None, error=error_label(error) if error is not None else None,
+        served_model=served_model if error is None else None)

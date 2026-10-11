@@ -7,6 +7,7 @@ is expressed as a domain plan (e.g. `domain.admission.Admission`) and committed 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from munchhausen.domain.admission import Admission
@@ -19,7 +20,7 @@ from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
 from munchhausen.domain.question import QuestionKeys
-from munchhausen.domain.registers import Cursor, RoundRecord, RunRecord, SpendRow, Term
+from munchhausen.domain.registers import Cursor, PlantedMapping, RoundRecord, RunRecord, SpendRow, Term
 
 # --- the `world` database ---------------------------------------------------------------------------
 
@@ -205,6 +206,40 @@ class RunRepository(Protocol):
 
     async def put_round(self, round_: RoundRecord) -> None: ...
 
+    # --- M4 evidence (additive) ------------------------------------------------------------------------
+
+    async def get(self, run_id: str) -> RunRecord | None: ...
+
+    async def list_runs(self, limit: int) -> list[RunRecord]: ...
+
+    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None) -> None:
+        """Stamp `ended_at` and `models_served`: the only fields of a run record written after its start."""
+        ...
+
+    async def merge_round(self, run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> None:
+        """`$merge` the round's record into `rounds`, computed in Atlas over `episodes`, `drafts`,
+        `decisions`, `fires` and `spend`. `idx_range` is (first, last), both inclusive."""
+        ...
+
+
+@runtime_checkable
+class EvidenceRepository(Protocol):
+    """Read-only evidence over one run (corpus/EVIDENCE.md § 2), plus the evaluation-only planted map.
+    Nothing on the learning path calls it."""
+
+    async def episode_count(self, run_id: str) -> int: ...
+
+    async def snapshot(self, run_id: str) -> dict[str, list[dict[str, Any]]]:
+        """Projected rows of `episodes`, `decisions`, `fires`, `backtests`, `drafts`, `rounds`,
+        `planted_map` for one run: the input of every reading. Keys are those store names."""
+        ...
+
+    async def spend_summary(self, run_id: str) -> list[dict[str, Any]]:
+        """`spend` grouped by arm × stage × model: calls, errors, tokens, usd, mean latency."""
+        ...
+
+    async def put_mapping(self, mapping: PlantedMapping) -> None: ...
+
 
 @runtime_checkable
 class SpendRepository(Protocol):
@@ -238,6 +273,7 @@ class Store(Protocol):
     runs: RunRepository
     spend: SpendRepository
     lenses: LensRepository
+    evidence: EvidenceRepository              # M4 (additive): readings and the planted map
 
     def world(self) -> DocumentReader:
         """The `world` database as the read-only executor user."""

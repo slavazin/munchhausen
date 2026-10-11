@@ -20,7 +20,7 @@ from munchhausen.domain.episode import EVALUATION_ONLY_FIELDS, Episode
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
-from munchhausen.domain.registers import Cursor, RoundRecord, RunRecord, SpendRow, Term
+from munchhausen.domain.registers import Cursor, PlantedMapping, RoundRecord, RunRecord, SpendRow, Term
 from munchhausen.store.codec import from_doc, to_doc
 from munchhausen.store.names import C
 
@@ -253,8 +253,9 @@ class AtlasTerms:
 
 
 class AtlasRuns:
-    def __init__(self, runs: AsyncCollection[Doc], rounds: AsyncCollection[Doc]) -> None:
-        self._runs, self._rounds = runs, rounds
+    def __init__(self, runs: AsyncCollection[Doc], rounds: AsyncCollection[Doc],
+                 episodes: AsyncCollection[Doc] | None = None) -> None:
+        self._runs, self._rounds, self._episodes = runs, rounds, episodes
 
     async def start(self, run: RunRecord) -> RunRecord:
         try:
@@ -267,6 +268,174 @@ class AtlasRuns:
         doc = to_doc(round_)
         await self._rounds.replace_one({"run_id": round_.run_id, "arm": round_.arm, "round": round_.round},
                                        doc, upsert=True)
+
+    # --- M4 evidence (additive) ------------------------------------------------------------------------
+
+    async def get(self, run_id: str) -> RunRecord | None:
+        return from_doc(RunRecord, await self._runs.find_one({"_id": run_id}))
+
+    async def list_runs(self, limit: int) -> list[RunRecord]:
+        cur = self._runs.find({}).sort("started_at", -1).limit(limit)
+        return [RunRecord.model_validate(d) async for d in cur]
+
+    async def finish(self, run_id: str, at: datetime, models_served: dict[str, Any] | None = None) -> None:
+        await self._runs.update_one({"_id": run_id}, {"$set": {"ended_at": at, "models_served": models_served or {}}})
+
+    async def merge_round(self, run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> None:
+        if self._episodes is None:
+            raise RuntimeError("AtlasRuns was built without the episodes collection")
+        await (await self._episodes.aggregate(round_pipeline(run_id, arm, round_, idx_range))).to_list()
+
+
+PLANTED_MAP = "planted_map"     # evaluation-only collection (S5); created on first write, no validator
+
+
+def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int]) -> Pipeline:
+    """The round record, computed in Atlas and `$merge`d into `rounds` (SPEC § 20.2). Run over `episodes`.
+
+    Populations: stream accuracy, self-assessed accuracy and the calibration gap over stream episodes with
+    `idx` in `idx_range` (inclusive); V accuracy over `stream: "v"` episodes whose `v_at` (else `idx`) is in
+    range; lifecycle counts from `drafts` of this round (admitted/refused) and from `decisions` whose
+    `lifecycle.at_idx` is in range (superseded/moot/retired/converged); fires by role with `at_idx` in range;
+    `usd_cum` = the arm's spend so far, `usd` = `usd_cum` − the previous round's `usd_cum`."""
+    lo, hi = idx_range
+    in_range = {"$gte": lo, "$lte": hi}
+    is_stream = {"$eq": ["$stream", "stream"]}
+    v_at = {"$ifNull": ["$v_at", "$idx"]}
+    is_v = {"$and": [{"$eq": ["$stream", "v"]}, {"$gte": [v_at, lo]}, {"$lte": [v_at, hi]}]}
+    in_idx = {"$and": [{"$gte": ["$idx", lo]}, {"$lte": ["$idx", hi]}]}
+    stream_in = {"$and": [is_stream, in_idx]}
+
+    def when(cond: Any, val: Any) -> Doc:
+        return {"$sum": {"$cond": [cond, val, 0]}}
+
+    tok = {"$objectToArray": {"$ifNull": ["$tokens", {}]}}
+    return [
+        {"$match": {"run_id": run_id, "arm": arm}},
+        {"$match": {"$or": [{"idx": in_range}, {"v_at": in_range}]}},
+        {"$group": {
+            "_id": None,
+            "n_stream": when(stream_in, 1),
+            "correct": when({"$and": [stream_in, "$correct"]}, 1),
+            "conf": when(stream_in, "$confidence"),
+            "n_v": when(is_v, 1),
+            "correct_v": when({"$and": [is_v, "$correct"]}, 1),
+            "view_filtered": when({"$and": [stream_in, {"$gt": [{"$size": {"$objectToArray": {
+                "$ifNull": ["$view_map", {}]}}}, 0]}]}, 1),
+            "tokens_in": when(stream_in, {"$ifNull": ["$tokens.in", 0]}),
+            "tokens_out": when(stream_in, {"$ifNull": ["$tokens.out", 0]}),
+            "tokens_all": when(stream_in, {"$sum": {"$map": {"input": tok, "in": "$$this.v"}}}),
+        }},
+        {"$lookup": {"from": C.DRAFTS.value, "pipeline": [
+            {"$match": {"run_id": run_id, "arm": arm, "round": round_}},
+            {"$group": {"_id": "$status", "n": {"$sum": 1}}}], "as": "drafts"}},
+        {"$lookup": {"from": C.DECISIONS.value, "pipeline": [
+            {"$match": {"run_id": run_id, "arm": arm, "lifecycle.at_idx": in_range}},
+            {"$group": {"_id": "$lifecycle.status", "n": {"$sum": 1}}}], "as": "flips"}},
+        {"$lookup": {"from": C.DECISIONS.value, "pipeline": [
+            {"$match": {"run_id": run_id, "arm": arm, "lifecycle.status": "admitted"}},
+            {"$count": "n"}], "as": "store_admitted"}},
+        {"$lookup": {"from": C.OBSERVATIONS.value, "pipeline": [
+            {"$match": {"run_id": run_id, "arm": arm, "disposition": "open"}},
+            {"$count": "n"}], "as": "store_open_obs"}},
+        {"$lookup": {"from": C.FIRES.value, "pipeline": [
+            {"$match": {"run_id": run_id, "arm": arm, "at_idx": in_range}},
+            {"$group": {"_id": "$role", "n": {"$sum": 1}}}], "as": "fires"}},
+        {"$lookup": {"from": C.SPEND.value, "pipeline": [
+            {"$match": {"meta.run_id": run_id, "meta.arm": arm}},
+            {"$group": {"_id": None, "usd": {"$sum": "$usd"}}}], "as": "spend"}},
+        {"$lookup": {"from": C.ROUNDS.value, "pipeline": [
+            {"$match": {"run_id": run_id, "arm": arm, "round": round_ - 1}},
+            {"$project": {"usd_cum": 1}}], "as": "prev"}},
+        {"$set": {
+            "_cnt": {"$arrayToObject": {"$map": {"input": "$drafts", "in": {"k": "$$this._id", "v": "$$this.n"}}}},
+            "_flip": {"$arrayToObject": {"$map": {"input": "$flips", "in": {"k": "$$this._id", "v": "$$this.n"}}}},
+            "_usd_cum": {"$ifNull": [{"$first": "$spend.usd"}, 0]},
+            "_usd_prev": {"$ifNull": [{"$first": "$prev.usd_cum"}, 0]},
+        }},
+        {"$project": {
+            "_id": 0, "run_id": {"$literal": run_id}, "arm": {"$literal": arm}, "round": {"$literal": round_},
+            "idx_range": {"$literal": [lo, hi]},
+            "n_stream": 1,
+            "acc_stream": {"$cond": [{"$gt": ["$n_stream", 0]}, {"$divide": ["$correct", "$n_stream"]}, None]},
+            "acc_self_assessed": {"$cond": [{"$gt": ["$n_stream", 0]}, {"$divide": ["$conf", "$n_stream"]}, None]},
+            "calibration_gap": {"$cond": [{"$gt": ["$n_stream", 0]},
+                                          {"$divide": [{"$subtract": ["$conf", "$correct"]}, "$n_stream"]}, None]},
+            "acc_v": {"$cond": [{"$gt": ["$n_v", 0]}, {"$divide": ["$correct_v", "$n_v"]}, None]},
+            "store_sizes": {"decisions_admitted": {"$ifNull": [{"$first": "$store_admitted.n"}, 0]},
+                            "observations_open": {"$ifNull": [{"$first": "$store_open_obs.n"}, 0]}},
+            "admitted": {"$ifNull": ["$_cnt.admitted", 0]},
+            "refused": {"$ifNull": ["$_cnt.refused", 0]},
+            "superseded": {"$ifNull": ["$_flip.superseded", 0]},
+            "retired": {"$ifNull": ["$_flip.retired", 0]},
+            "moot": {"$ifNull": ["$_flip.moot", 0]},
+            "converged": {"$ifNull": ["$_flip.converged", 0]},
+            "fires": {"$arrayToObject": {"$map": {"input": "$fires", "in": {"k": "$$this._id", "v": "$$this.n"}}}},
+            "view_filtered": 1, "tokens_in": 1, "tokens_out": 1,
+            "tokens_per_episode": {"$cond": [{"$gt": ["$n_stream", 0]},
+                                             {"$divide": ["$tokens_all", "$n_stream"]}, None]},
+            "usd_cum": "$_usd_cum",
+            "usd": {"$subtract": ["$_usd_cum", "$_usd_prev"]},
+            "usd_per_episode": {"$cond": [{"$gt": ["$n_stream", 0]},
+                                          {"$divide": [{"$subtract": ["$_usd_cum", "$_usd_prev"]}, "$n_stream"]},
+                                          None]},
+            "schema_version": {"$literal": 1},
+            "closed_at": "$$NOW",
+        }},
+        {"$merge": {"into": C.ROUNDS.value, "on": ["run_id", "arm", "round"],
+                    "whenMatched": "replace", "whenNotMatched": "insert"}},
+    ]
+
+
+_HEAVY = {"emb": 0}
+_EPISODE_FIELDS = {f: 1 for f in ("run_id", "arm", "idx", "stream", "question_id", "template", "persona", "terms",
+                                  "consulted", "view_map", "answer", "confidence", "correct", "figure",
+                                  "confirmed_figure", "retry_correct", "error", "tokens", "latency_ms",
+                                  "world_version", "v_at", "residuals")}
+
+
+class AtlasEvidence:
+    """Read-only evidence over one run, plus the planted map (evaluation-only)."""
+
+    def __init__(self, db: AsyncDatabase[Doc]) -> None:
+        self._db = db
+
+    async def episode_count(self, run_id: str) -> int:
+        return await self._db[C.EPISODES.value].count_documents({"run_id": run_id})
+
+    async def snapshot(self, run_id: str) -> dict[str, list[Doc]]:
+        q = {"run_id": run_id}
+        out: dict[str, list[Doc]] = {
+            "episodes": await self._db[C.EPISODES.value].find(q, _EPISODE_FIELDS).sort("idx", 1).to_list(),
+        }
+        for name in (C.DECISIONS, C.FIRES, C.BACKTESTS, C.DRAFTS, C.ROUNDS):
+            out[name.value] = await self._db[name.value].find(q, _HEAVY).to_list()
+        out[PLANTED_MAP] = await self._db[PLANTED_MAP].find(q).to_list()
+        return out
+
+    async def spend_summary(self, run_id: str) -> list[Doc]:
+        pipeline: Pipeline = [
+            {"$match": {"meta.run_id": run_id}},
+            {"$group": {"_id": {"arm": "$meta.arm", "stage": "$meta.stage", "model": "$meta.model"},
+                        "calls": {"$sum": 1},
+                        "errors": {"$sum": {"$cond": [{"$eq": ["$ok", False]}, 1, 0]}},
+                        "tokens_in": {"$sum": "$tokens_in"}, "tokens_out": {"$sum": "$tokens_out"},
+                        "cache_read": {"$sum": {"$ifNull": ["$tokens_cache_read", 0]}},
+                        "cache_write": {"$sum": {"$ifNull": ["$tokens_cache_write", 0]}},
+                        "usd": {"$sum": "$usd"}, "latency_ms_mean": {"$avg": "$latency_ms"},
+                        "served": {"$addToSet": "$served_model"},
+                        "error_kinds": {"$push": "$error"}}},
+            {"$set": {"served": {"$filter": {"input": "$served", "cond": {"$ne": ["$$this", None]}}},
+                      "error_kinds": {"$filter": {"input": "$error_kinds", "cond": {"$ne": ["$$this", None]}}}}},
+            {"$replaceWith": {"$mergeObjects": ["$_id", "$$ROOT"]}},
+            {"$project": {"_id": 0}},
+            {"$sort": {"arm": 1, "stage": 1, "model": 1}},
+        ]
+        return await (await self._db[C.SPEND.value].aggregate(pipeline)).to_list()
+
+    async def put_mapping(self, mapping: PlantedMapping) -> None:
+        doc = to_doc(mapping)
+        await self._db[PLANTED_MAP].replace_one({"_id": doc["_id"]}, doc, upsert=True)
 
 
 class AtlasSpend:
@@ -303,7 +472,8 @@ def repositories(db: AsyncDatabase[Doc], lease_ttl_s: int, seed_weights: LensWei
         "leases": AtlasLeases(db[C.LEASES.value], db[C.EPISODES.value], lease_ttl_s),
         "tool_access": AtlasToolAccess(db[C.TOOL_ACCESS.value]),
         "terms": AtlasTerms(db[C.TERMS.value]),
-        "runs": AtlasRuns(db[C.RUNS.value], db[C.ROUNDS.value]),
+        "runs": AtlasRuns(db[C.RUNS.value], db[C.ROUNDS.value], db[C.EPISODES.value]),
+        "evidence": AtlasEvidence(db),
         "spend": AtlasSpend(db[C.SPEND.value]),
         "lenses": AtlasLenses(db[C.LENSES.value], db[C.LENS_WEIGHTS.value], seed_weights),
     }
