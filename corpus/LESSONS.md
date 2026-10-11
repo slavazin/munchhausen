@@ -90,6 +90,25 @@ history does not show is marked *(log only)*. Each rule is a Do plus the oversho
 **Rule:** Do simulate "unbuilt" by monkeypatching the seam to raise, and check fakes against their Protocol; Don't assert on today's stub, or hand-write a fake per surface.
 **Mechanism:** `engine/tests/test_fakes_conform.py` compares each fake's methods with its `ports/` Protocol by `inspect.signature`; one shared `engine/tests/fakes.py`.
 
+## 9. The gate checks a population narrower than the decision's reach (found in Run A)
+
+- governed's Q1 successor `D-44b2471eeb` (`st∈{2,4,7}`) was applied to the control template `customers_born_before` at idx 475, 562, 579, 584; it was wrong each time. ungated's successor marked that template not-applicable.
+- The backtest samples replays from the draft's source shape (and its held-out fold). The hook reaches every question whose terms match it, so `broken` never counts a miss outside the shape.
+- The miss was not silent: each one raised an open unattributed fire on the decision. Nothing turned those fires into a revisit.
+
+**Caught:** post-run breakdown of F6 by quirk (`by_quirk.py`), not by any reading. **Cost:** 4–5 control misses in governed (82/87 vs ungated's 87/87).
+**Rule:** Do sample the backtest from the hook's reach (questions the hook would consult), stratified by template; Don't treat a decision's sources as its population.
+**Mechanism:** to build. Candidate: `BacktestRun` draws a stratum from `terms` matches of the draft's hook; a test with an out-of-shape template the hook matches must report `broken ≥ 1`.
+
+## 10. Revisit triggers read consistent residuals as drift (found in Run A)
+
+- Persona rounding (claire, to the thousand) and off-by-one boundary residuals raised fires on decisions unrelated to them: 7 open fires on governed's floor `D-f08c8d69ae` @540–594 are claire misses; governed fire @467 and ungated fires are off-by-one or one-rounding-step residuals.
+- Attribution charges a residual to whatever decision sat in the episode's pipeline.
+
+**Caught:** reading the lifecycle table against episodes (`idx_cmp.py`). **Cost:** open fires that look like drift; a reviewer must hand-check each.
+**Rule:** Do attribute a residual only when its sign and size match the decision's claim, and route persona-shaped residuals (a fixed rounding unit) to persona scope; Don't let any residual on a consulted decision count toward its trigger.
+**Mechanism:** to build, after the event. A test: a claire-rounded residual on an episode consulting an unrelated decision raises no fire on it.
+
 ## Brief template additions
 
 - "Your worktree may be cut from `main`. Run `git log -1 --format=%h` and `git merge-base --is-ancestor <seam-sha> HEAD`; on failure, `git reset --hard <seam-sha>`."
