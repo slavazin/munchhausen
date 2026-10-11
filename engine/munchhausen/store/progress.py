@@ -49,9 +49,11 @@ async def progress(db: AsyncDatabase[Doc], run_id: str, arms: list[str], window:
             "v": await db[C.EPISODES.value].count_documents({**q, "stream": "v"}),
             "round": cursor.get("round"),
             "next_idx": cursor.get("next_idx"),
-            "acc_recent": round(sum(1 for e in recent_ok if e.get("correct")) / len(recent_ok), 3) if recent_ok else None,
+            "acc_recent": (round(sum(1 for e in recent_ok if e.get("correct")) / len(recent_ok), 3)
+                           if recent_ok else None),
             "recent_n": len(recent_ok),
-            "episodes_failed": await db[C.EPISODES.value].count_documents({**q, "error": {"$regex": "^episode_failed"}}),
+            "episodes_failed": await db[C.EPISODES.value].count_documents(
+                {**q, "error": {"$regex": "^episode_failed"}}),
             "observations": await _counts(db, C.OBSERVATIONS.value, q, "disposition"),
             "drafts": await _counts(db, C.DRAFTS.value, q, "status"),
             "backtests": await _counts(db, C.BACKTESTS.value, q, "verdict"),
