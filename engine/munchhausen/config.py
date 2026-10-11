@@ -110,6 +110,19 @@ class Settings(BaseSettings):
     seed_decisions: str = "empty"
     not_this_min: int = 3
     fusion: Literal["rank", "score"] = "rank"
+    # adjudication surface (S4, M3b)
+    backtest_sample: Literal["hashed", "random"] = "hashed"   # hashed: `$facet` + seeded hash order (replayable)
+    backtest_seed: int = 17             # seed of the hashed balanced sample
+    backtest_concurrency: int = 4       # paired replays in flight per backtest (2 × BACKTEST_N calls in total)
+    l2_route_contested: bool = False    # L2 also routes a `new` draft as supersede when exactly one contested
+    #                                     neighbour shares a hook term (off: minimum configuration, § 3a)
+    direct_merge: bool = True           # lessons merge into an admitted decision at NAIVE_MERGE_COSINE
+    lesson_max_tokens: int = 2000
+    self_grade_max_tokens: int = 2000
+    lens_max_concurrency: int = 5       # isolated Jev calls in flight per draft
+    lens_phrasings: int = 3             # phrasings asked per lens (1–3); > 1 logs hedging, mean 4p(1−p) (§ 24.2 L6)
+    lens_model: str | None = None       # TypeSafe model; None: the SDK default (jev-latest)
+    lens_timeout_s: float = 20.0
 
     # --- second-order loop ---------------------------------------------------------------------------
     label_horizon: int = 150

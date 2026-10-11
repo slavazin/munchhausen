@@ -19,7 +19,7 @@ from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
 from munchhausen.domain.question import QuestionKeys
-from munchhausen.domain.registers import Cursor, RoundRecord, RunRecord, SpendRow, Term
+from munchhausen.domain.registers import Cursor, RoundRecord, RunRecord, SpendRow, Term, ToolAccess
 
 # --- the `world` database ---------------------------------------------------------------------------
 
@@ -75,6 +75,14 @@ class EpisodeRepository(Protocol):
         only arms with an authority call it; there the authority's reply makes a miss learner-legal."""
         ...
 
+    async def backtest_sample(self, run_id: str, arm: str, match: dict[str, Any], *, n: int,
+                              seed: int | None) -> list[Episode]:
+        """The backtest's balanced sample (§ 7.4, § 20.2) over a complete `$match` the caller builds: one
+        `$facet` branch over episodes scored correct, one over first-attempt misses, ≤ n in total, a short
+        stratum topped up from the other. `seed` set: each branch is ordered by a seeded hash of `_id`, so the
+        same draft over the same store draws the same sample; `None`: `$sample`."""
+        ...
+
 
 @runtime_checkable
 class ObservationRepository(Protocol):
@@ -114,6 +122,15 @@ class DecisionRepository(Protocol):
         """Recompute `evidence_state` from open fires. Computed, never written by hand."""
         ...
 
+    async def trail(self, decision_id: str) -> dict[str, Any] | None:
+        """`why` (SPEC § 17 pane 5): the decision, its lineage (`$graphLookup` over `latches.edges`), its
+        successors, and `$lookup`s to source observations, episodes, its backtest and its fires. Read-only."""
+        ...
+
+    async def ids_with_term(self, run_id: str, term: str, arm: str | None = None) -> list[str]:
+        """Decisions (any lifecycle status) whose hook names `term`, oldest first."""
+        ...
+
 
 @runtime_checkable
 class FireRepository(Protocol):
@@ -122,6 +139,12 @@ class FireRepository(Protocol):
     async def open_for(self, decision_id: str) -> list[Fire]: ...
 
     async def dispose(self, fire_ids: Sequence[str], disposition: FireDisposition, disposer: Disposer) -> None: ...
+
+    async def for_decision(self, decision_id: str) -> list[Fire]:
+        """Every fire a decision's latches emitted, any role and disposition, by `at_idx`."""
+        ...
+
+    async def get(self, fire_id: str) -> Fire | None: ...
 
 
 @runtime_checkable
@@ -140,6 +163,10 @@ class BacktestRepository(Protocol):
     async def put(self, backtest: Backtest) -> None: ...
 
     async def get(self, backtest_id: str) -> Backtest | None: ...
+
+    async def for_arm(self, run_id: str, arm: str) -> list[Backtest]:
+        """Backtests of one arm in insertion order (the § 12 premise reads the first ten)."""
+        ...
 
 
 # --- registers --------------------------------------------------------------------------------------
@@ -172,6 +199,10 @@ class LeaseRepository(Protocol):
 @runtime_checkable
 class ToolAccessRepository(Protocol):
     async def view_map(self, run_id: str, arm: str) -> dict[str, str]: ...
+
+    async def rewires(self, run_id: str, arm: str) -> list[ToolAccess]:
+        """The register's rows with the floor decision owning each (view drop/restore, backtest context)."""
+        ...
 
 
 @runtime_checkable
