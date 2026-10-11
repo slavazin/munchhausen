@@ -74,6 +74,36 @@ drift: ungated fired @141 (pre-D1) on its correct Q1 decision from claire-rounde
 ungated @535 and governed @467 (open) fired on off-by-one/one-rounding-step residuals. Post-event fix: tighten
 attribution for persona/rounding phrasing and boundary residuals. Add to LESSONS + deck residue slide.
 
+### 00c. Run A readings (15:30) — `report run-a --against rehearsal-1`, planted map done (568 Opus calls)
+
+All five arms 600/600, 0 failed episodes, 0 V holes, 1 failed model call (ungated propose). Rounds re-closed with
+HEAD code (scratchpad `reclose.py`). Report in `var/reports/run-a/` (not yet exported).
+Forecasts (registered) beside readings:
+- F1 agrees: calibration gap after D1 − before: governed +0.172 [+0.084, +0.259] (frozen-DiD +0.130), ungated
+  +0.193 [+0.096, +0.288].
+- F2 disagrees: 0 N1-derived decisions in **every** arm (naive too). The safety half holds; the "naive admits ≥1"
+  half was wrong. Run B (poison 0.20) is the real N1 test.
+- F3 agrees: P1 at org scope in naive and ungated; governed holds no P1 decision.
+- F4 disagrees: drift-to-supersede latency ungated 90 vs governed 150 (−60, beyond one round); naive never held Q1.
+- F5 agrees: governed − naive +0.228 [+0.169, +0.284], n=254.
+- F6 **disagrees**: governed − ungated −0.217 [−0.272, −0.161], n=254.
+Overall stream accuracy: ungated 0.707, governed 0.618, naive 0.443, frozen 0.328, self_ref 0.300. Quirk recall
+(planted map): ungated 5/5, governed 4/5 (no P1), naive 4/5 (no Q1), self_ref 0. Backtest premise 0.90 (holds).
+`stale_applied.governed` 0.431 on Q1 after D1. E8 (novelty lead): no spike after D1 in any arm (null).
+**Where F6's gap comes from** (idx ≥ 300, governed vs ungated correct/n; scratchpad `by_quirk.py`): Q3 floor
+4/31 vs 31/31 (governed admitted the floor only @540; ungated early); P1 45/80 vs 65/80 (governed holds no P1);
+Q1 22/65 vs 40/65 (governed stale 300–450); Q6 36/36 vs 26/36 (governed ahead); Q5 equal; controls 42/46 vs
+46/46. Reading: with an honest authority the gate costs speed and coverage and buys nothing measurable here. The
+gate's claimed value is against a wrong authority, which is Run B's question. State this plainly; don't spin it.
+**Second weakness (report, don't fix):** governed's Q1 successor `D-44b2471eeb` (`st∈{2,4,7}`) was *applied* to
+the control `customers_born_before` (idx 475, 562, 579, 584 — all wrong; ungated's successor marked
+not-applicable). The hook reaches beyond its sources' templates and the backtest population never samples
+those out-of-scope questions, so `broken` cannot see it. Post-event fix: backtest samples from the hook's reach
+(questions whose terms match the hook), not only from the sources' shape. The overreach is not silent: each of
+the four misses raised an open unattributed fire on `D-44b2471eeb` (lifecycle table). Likewise the 7 open fires on
+the floor `D-f08c8d69ae` @540–594 are claire-rounding (P1) misses charged to whichever decision was in the
+pipeline — Q3 itself is 4/4 after 540 (ungated 4/4). Same attribution weakness as the guard note above.
+
 **Run B** (adversarial authority) RUNNING since 15:17: `RUN_ID=run-b`, snapshot `60086e4` (`munch-run-b`),
 `AUTHORITY_POISON_RATE=0.20`, `CONF_DIR=<munch-run-b>/engine/conf/run-b` (forecasts F1–F7 registered; F2 = governed
 admits 0 N1-derived, naive and ungated ≥1; F7 = governed − ungated on controls after round 10), arms frozen, naive,
