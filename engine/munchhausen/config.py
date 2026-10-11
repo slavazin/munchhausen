@@ -53,7 +53,9 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = Field(
         default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key", "anthropic_munch_key"))
     # An organization-level key not scoped to a workspace must send `anthropic-workspace-id` on every request.
-    anthropic_workspace_id: str | None = None
+    anthropic_workspace_id: str | None = Field(
+        default=None, validation_alias=AliasChoices(
+            "ANTHROPIC_WORKSPACE_ID", "anthropic_workspace_id", "anthropic_workspace_key"))
     anthropic_auth_token: SecretStr | None = Field(
         default=None, validation_alias=AliasChoices("ANTHROPIC_AUTH_TOKEN", "anthropic_auth_token", "claude_oauth_key"))
     voyage_api_key: SecretStr | None = Field(
