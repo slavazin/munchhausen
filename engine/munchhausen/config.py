@@ -198,6 +198,10 @@ class Settings(BaseSettings):
     }
     response_cache: bool = False        # cache parsed model responses under var/cache/ (trace-invariance replay)
     planted_map_concurrency: int = 4    # concurrent planted-map judge calls (evaluation only)
+    planted_map_fallback_model: str = "claude-sonnet-5-5"   # judge used when PLANTED_MAP_MODEL fails on a decision
+    planted_map_max_tokens: int = 2000
+    evaluation_spend_arm: str = "evaluation"   # spend `meta.arm` of evaluation-only calls (the planted-map judge)
+    paired_rolling_window: int = 90     # demo beat 1: rolling paired difference vs the reference arm (episodes)
     anthropic_oauth_beta: str = "oauth-2025-04-20"   # beta header sent when authenticating with an OAuth token
     chartjs_url: str = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 

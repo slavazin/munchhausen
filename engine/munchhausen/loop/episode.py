@@ -109,6 +109,7 @@ class ForwardPass:
             if authority else None, retry_pipeline=retry_pipeline, retry_correct=retry_correct,
             residuals=residuals, error=error, latency_ms=int((time.monotonic() - t0) * 1000), stream=stream,
             collections=question.collections, v_at=at if stream == V else None,
+            matched_ids=tuple(d.id for d in consulted),
         )
         await self.store.episodes.put(episode)
         self.trace.event("episode_written", {**ids, "correct": episode.correct, "error": error,

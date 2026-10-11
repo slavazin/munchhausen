@@ -20,7 +20,7 @@ class LLM(Protocol):
     client: Any   # anthropic.AsyncAnthropic, for parties that run a tool loop (the nominator's world tool)
 
     async def parse(self, *, stage: str, arm: str, model: str, system: str, user: str, wire: type[W],
-                    effort: str | None = None, max_tokens: int = 16000) -> W: ...
+                    effort: str | None = None, max_tokens: int = 16000, temperature: float | None = None) -> W: ...
 
     async def record_call(self, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int,
                           system: str = "", request_id: str | None = None, served_model: str | None = None) -> None:

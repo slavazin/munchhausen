@@ -405,13 +405,19 @@ async def run(llm: LLM, settings: Settings, inp: NominatorInput) -> tuple[EntryC
     turns = settings.nominator_max_tool_turns
     for turn in range(turns):
         t0 = time.monotonic()
-        resp = await llm.client.messages.create(
-            model=settings.nominator_model, max_tokens=settings.nominator_max_tokens,
-            system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
-            tools=TOOLS, messages=messages, output_config={"effort": settings.nominator_effort})
+        try:
+            resp = await llm.client.messages.create(
+                model=settings.nominator_model, max_tokens=settings.nominator_max_tokens,
+                system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
+                tools=TOOLS, messages=messages, output_config={"effort": settings.nominator_effort})
+        except Exception as e:   # a failed call is a spend row (evidence), then propagates
+            await llm.record_error(stage=STAGE, arm=arm, model=settings.nominator_model, error=e,
+                                   latency_ms=int((time.monotonic() - t0) * 1000), system=SYSTEM)
+            raise
         await llm.record_call(stage=STAGE, arm=arm, model=settings.nominator_model, usage=resp.usage,
                               latency_ms=int((time.monotonic() - t0) * 1000), system=SYSTEM,
-                              request_id=getattr(resp, "_request_id", None))
+                              request_id=getattr(resp, "_request_id", None),
+                              served_model=getattr(resp, "model", None))
         if resp.stop_reason == "refusal":
             raise RuntimeError(f"{STAGE}: refusal")
         messages.append({"role": "assistant", "content": resp.content})

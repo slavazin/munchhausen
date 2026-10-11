@@ -24,24 +24,38 @@ Names below are **one-way doors**: readers depend on them. Add a field; never re
 | `models_served` | stamped at `finish_run` from `spend`: stage → `{requested, served, ok, failed{error: n}}` |
 | `prompt_hashes` | party → sha256 of its `impl/parties/<party>.py` source (prompt, wire and mapping live there) |
 | `pack_hash`, `world_counts` | `World.pack_hash`/`inventory()` when offered, else the pack file's sha256 and `{}` |
-| `started_at`, `ended_at` | `ended_at` and `models_served` are the only fields written after start |
+| `arm_specs` | arm → `ArmSpec` as registered; readings use these, not the current `conf/arms.yaml` |
+| `length` | `run --length` (None: `RUN_LENGTH`) |
+| `started_at`, `ended_at` | written at start / by `finish_run` (called from `run` in a `finally`) |
+| `lost_spend_writes` | spend rows the call path failed to write, stamped at finish |
+| `resumes[]` | one entry per resume where something moved: `{at, length, git_dirty, moved{field: {registered, current}}}` over knobs, git sha, prompt hashes, ports, pack hash, forecasts, arm specs, length |
 
-Rules: an existing record is returned unedited on resume. Episodes for a run id with no record → refused
-(`PreRegistrationError`). A changed `conf/forecasts.yaml` under an existing run id is warned and ignored:
-re-registering means a new `RUN_ID` (Run A is a pilot; Run B re-registers; `report --against` prints the knob diff).
+Rules: the registered fields are never edited; after start only `ended_at`, `models_served`,
+`lost_spend_writes` and `resumes[]` are written. Episodes for a run id with no record → refused
+(`PreRegistrationError`). A resume with moved fields appends to `resumes[]` and the report prints it; the
+registered forecasts hold. Re-registering means a new `RUN_ID` (Run A is a pilot; Run B re-registers;
+`report --against` prints the diff of knobs and every registered field).
 
 ## 2. Ledgers the readings read
 
-- `episodes`: first attempt `correct`, `confidence`, `consulted[{decision_id, disposition}]`, `view_map`,
-  `template`, `stream` (`stream` | `v` | `injection`), `tokens` (`{"in": n, "out": n}` is the shape the round
-  record sums), V episodes carry their read point in `v_at` (else `idx`).
-- `decisions`: lifecycle and status index. **Ask (S4):** add `admitted_at_idx` at admission; a superseded
-  decision's `lifecycle.at_idx` is its supersession index, so its admission index is otherwise recovered from
-  its draft's round (end of round).
-- `drafts` (`round`, `status`), `backtests` (`sampled[]` paired outcomes), `fires` (`role`, `at_idx`).
-- `planted_map` (new, evaluation only): `{_id: PM-<decision>, run_id, arm, decision_id, quirk|null, scope, model}`,
-  written by `munchhausen planted-map <run_id>` (Opus judge; never on the learning path).
-- `spend` (time series, meta `{run_id, arm, stage, model}`): one row per model call — `tokens_in/out`,
+- `episodes`: first attempt `correct`, `confidence`, `consulted[{decision_id, disposition}]` (proposer
+  dispositions), `matched_ids` (what the consulter returned: hook-matched or retrieved; E9 reads it),
+  `view_map`, `template`, `question_id`, `error` (an errored episode is excluded from every rate and pair and
+  counted; `PipelineRefused…` counts as a guard refusal), `stream` (`stream` | `v` | `injection`), V episodes
+  carry their read point in `v_at`.
+- `decisions`: lifecycle; `admitted_at_idx` when S4 writes it (else the lifecycle index while admitted, else the
+  end of its draft's round). Drift resolution = a held pre-drift decision `superseded` with its successor
+  present; `converged` (a merge) and `retired` are not resolution.
+- `drafts` (`round`, `status`, `source`: `injection` drafts and their backtests are counted apart, never in
+  organic readings), `backtests` (`sampled[]` paired outcomes), `fires` (`role`, `at_idx`), `tool_access`
+  (rewires, for the floor beat).
+- `planted_map` (evaluation only): `{_id: PM-<id>, run_id, arm, decision_id, quirk|null, scope, model, subject}`,
+  `subject` `decision` or `draft` (backtested drafts, for the § 12 premise join). Written by
+  `munchhausen planted-map <run_id>`: `PLANTED_MAP_MODEL`, then `PLANTED_MAP_FALLBACK_MODEL` per subject; rows
+  persisted as read; a re-run maps only unmapped subjects; spend tagged arm `EVALUATION_SPEND_ARM`.
+- Not metered: Voyage embed/rerank and the TypeSafe lens panel (the report discloses it).
+- `spend` (time series, meta `{run_id, arm, stage, model, episode_id?}`; `episode_id` from the `ContextVar`
+  named `current_episode_id` that the forward pass sets): one row per model call — `tokens_in/out`,
   `tokens_cache_read/write`, `latency_ms`, `usd` (list price, `MODEL_PRICES_USD_PER_MTOK`), `prompt_hash`
   (sha256 of the system prompt), `request_id` (`"cache"` on a response-cache hit), `served_model`
   (`message.model`), `ok`, `error` (class and HTTP status, e.g. `RateLimitError(429)`). **A failed call is a row.**
@@ -49,51 +63,50 @@ re-registering means a new `RUN_ID` (Run A is a pilot; Run B re-registers; `repo
 
 ## 3. `rounds` and trace events
 
-`evidence.close_round(h, arm, round, (first, last))` runs one aggregation over `episodes` with `$lookup`s into
-`drafts`, `decisions`, `observations`, `fires`, `spend`, `rounds` and `$merge`s into `rounds` on
-`(run_id, arm, round)`: `n_stream, acc_stream, acc_self_assessed, calibration_gap, acc_v, store_sizes,
-admitted, refused (drafts of the round), superseded, moot, retired, converged (lifecycle index in range),
-fires{role: n}, view_filtered, tokens_in/out, tokens_per_episode, usd_cum, usd, usd_per_episode, closed_at`.
+`evidence.close_round(h, arm, round, (lo, hi))` (half-open, as the runner emits it) runs one aggregation over
+`episodes` with `$lookup`s into `drafts`, `decisions`, `observations`, `fires`, `spend`, `rounds` and `$merge`s
+into `rounds` on `(run_id, arm, round)`: `n_stream, n_error, acc_stream, acc_self_assessed, calibration_gap`
+(the three over stream episodes without `error`), `acc_v, store_sizes, admitted, refused (drafts of the round),
+superseded, moot, retired, converged (lifecycle index in range), fires{role: n}, view_filtered, tokens_in/out,
+tokens_per_episode` (from `spend` rows whose `meta.episode_id` is one of the round's episodes; null when none
+are attributed, never 0), `usd_cum, usd, usd_per_episode, closed_at`. A round with no episodes in range gets an
+empty record.
 
 Trace (`TRACE_IMPL=jsonl`) → `var/runs/<run_id>/events.jsonl`, one line per event:
 `{at, run_id, name, arm, idx?, <ids>…}`. Write-only: nothing on the learning path reads it (SPEC § 21).
-Emit with `trace.event(name, payload)`; names outside the catalog are written with `uncatalogued: true`.
+The catalog (`domain/registers.TRACE_EVENTS`) is the names the surfaces emit; also catalogued by pattern:
+`<stage>.failed`, `lifecycle.<status>`, `injection.*`. Other names are written with `uncatalogued: true`.
 
-| name | payload ids |
+| surface | names |
 |---|---|
-| `episode` | `arm, idx, episode_id, question_id, template` (via `begin`/`finish`) |
-| `consultation` | `arm, idx, episode_id, decision_id, disposition` |
-| `guard_refusal` | `arm, idx, party, stage, reason` (pipeline guard; the sandbox reading counts these) |
-| `observation` | `arm, idx, observation_id, episode_id, class` |
-| `shape` | `arm, round, shape_id, observation_ids` |
-| `bar` | `arm, round, shape_id, passed, gap` |
-| `draft` | `arm, round, draft_id, shape_id, route` |
-| `layer` | `arm, draft_id, layer, verdict` |
-| `backtest` | `arm, draft_id, backtest_id, fixed, fixed_heldout, broken, verdict` |
-| `admission` | `arm, idx, decision_id, draft_id, backtest_id` |
-| `supersession` | `arm, idx, decision_id, superseded_by, fire_ids` |
-| `moot`, `retire` | `arm, idx, decision_id, reason` |
-| `view_rewire` | `arm, idx, decision_id, logical, view` |
-| `fire` | `arm, idx, fire_id, decision_id, role, cause` |
-| `fire_disposed` | `arm, idx, fire_id, disposition, disposer` |
-| `owner_override` | `arm, idx, decision_id, draft_id, verdict` |
-| `run_start`, `round_close`, `run_finish` | written by `evidence.py` |
+| forward pass, runner (S2) | `episode` (begin/finish), `consultation_set`, `view_resolved`, `guard_refusal` (carries `party`; read as `unknown` without it), `proposal_failed`, `episode_written`, `episode_failed`, `fire_raised`, `round_closed` |
+| shaping (S3) | `observation.none`, `observation.refused`, `observation.written`, `shape.formed`, `shape.split`, `shape.failed`, `shape.windowed`, `shape.refused`, `bar.verdict`, `bar.direction_read`, `nominator.run`, `nomination.failed`, `draft.written`, `draft.renominated`, `draft.resumed`, `draft.adjudicated`, `draft.supersede_stripped` |
+| adjudication, lifecycle (S4) | `backward.round`, `backward.unavailable`, `adjudication`, `adjudication.layer`, `adjudication.failed`, `backtest`, `admission`, `admission.failed`, `lifecycle.superseded` / `.converged` / `.moot` / `.retired` / `.sweep`, `view.create`, `view.drop`, `tool_access.rewire`, `fire.dispose`, `owner.dispose`, `direct.merge`, `self_grade`, `lensfit.label` |
+| injection (S6) | `injection.*` (counted apart) |
+| evidence (S5) | `run_start`, `run_finish` |
 
 ## 4. Readings (`metrics/readings.py`)
 
 Each returns `{name, value, unit, population, n, interval?, level?, query, note?}`. Arms come from `ArmSpec`s;
 arm names live only in `conf/forecasts.yaml` (`read:` blocks).
-- Curves: stream accuracy, self-assessed accuracy, calibration gap per arm per round; V accuracy per read point.
-- F1 `drift_calibration`: per arm holding a pre-drift decision on the drifting quirk (planted map; without one,
-  every pre-drift decision, flagged PROXY), gap after − before over `DRIFT_WINDOW`, after-window cut at the
-  supersession; two-sample bootstrap; the reference arm's difference-in-differences in the note.
-- F2/F3 `planted_count`/`planted_scope`: verdict `agrees`/`disagrees`/`unread`.
-- F4 `drift_latency`: resolution index − drift index; unresolved arms censored at their last index.
-- F5/F6 `paired_accuracy`: paired on `idx`, quirk-bearing templates (pack), `idx ≥ after_round · ROUND_SIZE`.
-- Stale-applied rate (L11: eligible only from `admission + LABEL_HORIZON`), backtest admit rate and fixed/broken
-  histograms, § 12 premise, supersession audit (doctrine § 11.2), E9 retrieval lead, spend, models served,
-  guard refusals.
-Verdicts: `above` / `within` / `below` (`unread` with no pairs). A reading without its inputs is `unread`.
+- Curves: stream accuracy, self-assessed accuracy, calibration gap per arm per round (errored excluded and
+  counted); V accuracy per read point; **paired difference vs the reference arm** (F1's `read.reference`),
+  rolling over `PAIRED_ROLLING_WINDOW` indices, one point per round with interval and n (demo beat 1).
+- F1 `drift_calibration`: per arm holding a pre-drift decision on the drifting quirk, gap after − before over
+  `DRIFT_WINDOW`; the after-window ends at a supersession or retirement (a converge does not end holding);
+  two-sample bootstrap; the reference arm's difference-in-differences in the note.
+- F2/F3 `planted_count`/`planted_scope` over decision subjects: `agrees`/`disagrees`; `unread` without a map or
+  when an expected arm did not run.
+- F4 `drift_latency`: supersession index − drift index. If either arm never held, or held but did not resolve,
+  the comparison is `unread` with the reason.
+- F5/F6 `paired_accuracy`: paired on `idx`, same `question_id`, neither side errored (dropped pairs counted in the
+  note), quirk-bearing templates (pack), `idx ≥ after_round · ROUND_SIZE`.
+- Stale-applied rate (L11), lifecycle counts (converged apart), backtest admit rate and histograms (organic
+  only), § 12 premise joined to the planted map of each draft (misses on the draft's quirk; unmapped drafts →
+  PROXY), supersession audit (doctrine § 11.2), E9 (reads `matched_ids`), floor (rewires, view-filtered
+  episodes), injection counts, spend, models served, guard refusals (from episodes' `error`), not-metered calls.
+Verdicts: `above` / `within` / `below`; `unread` with no pairs or missing inputs; **`unread (proxy)`** whenever
+the population is a proxy (no planted map): a proxy never earns an agreement verdict.
 
 ## 5. Report
 

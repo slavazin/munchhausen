@@ -7,10 +7,11 @@ arm, run or any reading, so its map cannot lean on the outcome it is used to rea
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from munchhausen.config import Settings
-from munchhausen.domain.decision import Decision
 from munchhausen.impl.parties import LLM
 
 STAGE = "planted_map"
@@ -33,7 +34,7 @@ class PlantedWire(BaseModel):
     rationale: str = Field(description="one sentence: which clause of the payload matches which definition")
 
 
-def user_prompt(decision: Decision, pack_definitions: str) -> str:
+def user_prompt(decision: Any, pack_definitions: str) -> str:
     hook = decision.hook.fires_when
     return (f"<quirks>\n{pack_definitions}\n</quirks>\n\n<decision>\n"
             f"title: {decision.title}\nkind: {decision.kind.value}\npayload: {decision.payload}\n"
@@ -41,8 +42,12 @@ def user_prompt(decision: Decision, pack_definitions: str) -> str:
             f"hook persona: {hook.persona or '-'}\n</decision>")
 
 
-async def run(llm: LLM, settings: Settings, decision: Decision, pack_definitions: str) -> str | None:
-    out = await llm.parse(stage=STAGE, arm=decision.arm, model=settings.planted_map_model, system=SYSTEM,
-                          user=user_prompt(decision, pack_definitions), wire=PlantedWire, max_tokens=2000)
+async def run(llm: LLM, settings: Settings, decision: Any, pack_definitions: str, *,
+              model: str | None = None) -> str | None:
+    """`decision` is any entry contract with `arm`, `title`, `kind`, `payload`, `hook` (a decision or a draft).
+    Spend is tagged arm `EVALUATION_SPEND_ARM`, never the decision's arm: the judge is not that arm's cost."""
+    out = await llm.parse(stage=STAGE, arm=settings.evaluation_spend_arm, model=model or settings.planted_map_model,
+                          system=SYSTEM, user=user_prompt(decision, pack_definitions), wire=PlantedWire,
+                          max_tokens=settings.planted_map_max_tokens)
     q = out.quirk.strip()
     return None if not q or q.lower() == NONE else q

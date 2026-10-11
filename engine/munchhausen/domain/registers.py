@@ -36,6 +36,12 @@ class RunRecord(Value):
     auth_mode: str = "none"
     # stage → {requested, served, ok, failed{error: n}}, stamped by `finish_run` from `spend` (with ended_at)
     models_served: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    length: int | None = None                 # `run --length` at start (None: RUN_LENGTH)
+    # one entry per resume that found something moved: {at, length, moved{field: {registered, current}}}
+    resumes: list[dict[str, Any]] = Field(default_factory=list)
+    lost_spend_writes: int = 0                # spend rows the call path could not write (stamped at finish)
+    arm_specs: dict[str, dict[str, Any]] = Field(default_factory=dict)   # arm → ArmSpec as registered
+    pack_file_hash: str | None = None         # sha256 of the pack file (`pack_hash` may be the World's own hash)
 
 
 class RoundRecord(Value):
@@ -59,8 +65,9 @@ class RoundRecord(Value):
     moot: int = 0
     converged: int = 0
     view_filtered: int = 0                    # stream episodes whose view_map rewired a collection
-    tokens_in: int = 0
-    tokens_out: int = 0
+    tokens_in: int | None = None              # from `spend` rows attributed to the round's episodes; None: none
+    tokens_out: int | None = None
+    n_error: int = 0                          # stream episodes with `error`: excluded from accuracy and gap
     usd: float = 0.0
     usd_per_episode: float | None = None
     usd_cum: float = 0.0                      # the arm's spend at round close (usd = usd_cum − previous usd_cum)
@@ -129,12 +136,31 @@ class PlantedMapping(Value):
     scope: Literal["org", "persona"]          # persona iff the hook carries a persona scope
     model: str
     at: datetime
+    subject: Literal["decision", "draft"] = "decision"   # `decision_id` holds a draft id when subject is draft
 
 
-# Trace event catalog (corpus/EVIDENCE.md § 3). `Trace.event(name, payload)`: `name` from this set,
-# `payload` = {arm, idx?, <ids>…}. An unknown name is still written, flagged `uncatalogued: true`.
+# Trace event catalog (corpus/EVIDENCE.md § 3): the names the surfaces emit are canonical. `Trace.event(name,
+# payload)` with `payload` = {arm, idx?, <ids>…}. An unknown name is still written, flagged `uncatalogued: true`.
+# A name ending in `.failed` (`<stage>.failed`) and `lifecycle.<status>` are catalogued by prefix/suffix.
 TRACE_EVENTS: frozenset[str] = frozenset({
-    "episode", "consultation", "guard_refusal", "observation", "shape", "bar", "draft", "layer", "backtest",
-    "admission", "supersession", "moot", "retire", "view_rewire", "fire", "fire_disposed", "owner_override",
-    "round_close", "run_start", "run_finish",
+    # forward pass and runner (S2)
+    "episode", "consultation_set", "view_resolved", "guard_refusal", "proposal_failed", "episode_written",
+    "episode_failed", "fire_raised", "round_closed",
+    # shaping (S3)
+    "observation.none", "observation.refused", "observation.written", "shape.formed", "shape.split",
+    "shape.failed", "shape.windowed", "shape.refused", "bar.verdict", "bar.direction_read", "nominator.run",
+    "nomination.failed", "draft.written", "draft.renominated", "draft.resumed", "draft.adjudicated",
+    "draft.supersede_stripped",
+    # adjudication and lifecycle (S4)
+    "backward.round", "backward.unavailable", "adjudication", "adjudication.layer", "adjudication.failed",
+    "backtest", "admission", "admission.failed", "lifecycle.superseded", "lifecycle.converged", "lifecycle.moot",
+    "lifecycle.retired", "lifecycle.sweep", "lifecycle.status", "view.create", "view.drop", "tool_access.rewire",
+    "fire.dispose", "owner.dispose", "direct.merge", "self_grade", "lensfit.label",
+    # evidence (S5)
+    "run_start", "run_finish",
 })
+
+
+def catalogued(name: str) -> bool:
+    return (name in TRACE_EVENTS or name.endswith(".failed") or name.startswith(("lifecycle.", "injection."))
+            or name == "signal")

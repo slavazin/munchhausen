@@ -27,7 +27,7 @@ def write_report(var_dir: Any, run: dict[str, Any], readings: dict[str, Any], *,
     out.mkdir(parents=True, exist_ok=True)
     if against is not None:
         readings = {**readings, "knob_diff": {"against": against.get("_id"),
-                                              "diff": rep.knob_diff(run.get("knobs", {}), against.get("knobs", {}))}}
+                                              "diff": rep.run_diff(run, against)}}
     files = {
         "readings.json": json.dumps(readings, indent=2, default=str),
         "report.md": rep.markdown(readings, run, against=against),
@@ -110,7 +110,8 @@ def register(app: typer.Typer) -> None:
                     a, b = (await h.store.runs.get(diff[0])), (await h.store.runs.get(diff[1]))
                     if a is None or b is None:
                         raise typer.BadParameter("unknown run id")
-                    _print({"this": a.id, "other": b.id, "diff": rep.knob_diff(a.knobs, b.knobs)})
+                    _print({"this": a.id, "other": b.id,
+                            "diff": rep.run_diff(a.model_dump(mode="json"), b.model_dump(mode="json"))})
                     return
                 _print([{"run_id": r.id, "started_at": r.started_at, "ended_at": r.ended_at, "git_sha": r.git_sha,
                          "git_dirty": r.git_dirty, "isolation": r.isolation, "arms": sorted(r.ports),
@@ -125,31 +126,43 @@ def register(app: typer.Typer) -> None:
     def planted_map_cmd(run_id: str) -> None:
         """Evaluation only: map every decision of a run to a planted quirk id or none (Opus judge; spends)."""
         from munchhausen.domain.decision import Decision
+        from munchhausen.domain.draft import Draft
+        from munchhausen.impl.parties import planted_map as party
         from munchhausen.metrics.planted_map import pack_definitions, planted_map
         from munchhausen.world.pack import load_pack
 
         async def go() -> None:
             h = harness()
+            s = h.settings
             try:
                 run = await h.store.runs.get(run_id)
                 if run is None:
                     raise typer.BadParameter(f"no run record for {run_id}")
-                pack = load_pack(h.settings.pack_path(run.pack))
+                pack = load_pack(s.pack_path(run.pack))
                 defs = pack_definitions(pack.quirks)
                 rows = await h.store.evidence.snapshot(run_id)
-                decisions = [Decision.model_validate(d) for d in rows["decisions"]]
-                models = h.shared("models", h.settings.models_impl)
+                done = {m["decision_id"] for m in rows["planted_map"]}           # resume: skip mapped subjects
+                backtested = {b.get("draft_id") for b in rows["backtests"]}
+                subjects: list[tuple[str, Any]] = [
+                    ("decision", Decision.model_validate(d)) for d in rows["decisions"] if d["_id"] not in done]
+                for d in rows["drafts"]:
+                    if d["_id"] in backtested and d["_id"] not in done:
+                        try:
+                            subjects.append(("draft", Draft.model_validate(d)))
+                        except Exception:  # noqa: BLE001 - a draft row the model cannot read is reported below
+                            typer.echo(f"[planted-map] draft {d['_id']} unreadable; not mapped", err=True)
+                models = h.shared("models", s.models_impl)
 
-                async def judge(d: Decision) -> str | None:
-                    return await models.planted_map(d, defs)
+                async def judge(subj: Any, model: str) -> str | None:
+                    return await party.run(models, s, subj, defs, model=model)
 
-                maps = await planted_map(decisions, judge, [q.id for q in pack.quirks],
-                                         model=h.settings.planted_map_model,
-                                         concurrency=h.settings.planted_map_concurrency)
-                for m in maps:
-                    await h.store.evidence.put_mapping(m)
-                _print({"run_id": run_id, "mapped": len(maps),
-                        "by_quirk": {q: sum(1 for m in maps if m.quirk == q) for q in {m.quirk for m in maps}}})
+                res = await planted_map(subjects, judge, [q.id for q in pack.quirks],
+                                        models=[s.planted_map_model, s.planted_map_fallback_model],
+                                        concurrency=s.planted_map_concurrency, sink=h.store.evidence.put_mapping)
+                _print({"run_id": run_id, "mapped": len(res.mapped), "already_mapped": len(done),
+                        "failed": res.failed, "by_model": res.by_model,
+                        "by_quirk": {str(q): sum(1 for m in res.mapped if m.quirk == q)
+                                     for q in {m.quirk for m in res.mapped}}})
             finally:
                 await h.close()
 
