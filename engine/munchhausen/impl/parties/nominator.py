@@ -39,6 +39,7 @@ from munchhausen.domain.latches import (
     RevisitLatch,
     WiringLatch,
 )
+from munchhausen.domain.pipeline_json import decode_dates, parse_pipeline
 from munchhausen.domain.scoring import matches
 from munchhausen.impl.parties import LLM
 from munchhausen.lint_language import lint_draft_language
@@ -229,8 +230,8 @@ class Session:
     async def aggregate(self, raw: dict[str, Any]) -> tuple[str, bool]:
         try:
             call = AggregateWire.model_validate(raw)
-            pipeline = json.loads(call.pipeline_json)
-            if not isinstance(pipeline, list):
+            pipeline, _repairs = parse_pipeline(call.pipeline_json)   # `$date` literals become dates
+            if pipeline is None:
                 raise ValueError("pipeline_json must be a JSON array of stages")
         except (ValidationError, ValueError) as e:
             return f"invalid call: {e}", True
@@ -300,7 +301,7 @@ def build_entry(w: DraftWire, s: Session) -> EntryContract:
         WiringLatch.build(supersedes=w.supersedes),
     ]
     if w.floor is not None:
-        latches.insert(2, FloorLatch(collection=w.floor.collection, match=json.loads(w.floor.match_json)))
+        latches.insert(2, FloorLatch(collection=w.floor.collection, match=decode_dates(json.loads(w.floor.match_json))))
     warrant = Warrant(source_observation_ids=shape.observation_ids, source_episode_ids=shape.episode_ids,
                       templates=len(shape.templates),
                       figures_reproduced=s.reproduced_by(chosen.label) if chosen else (),
