@@ -19,6 +19,7 @@ from typing import Any
 
 from munchhausen.config import REPO_ROOT, Settings
 from munchhausen.domain.arm import ArmSpec
+from munchhausen.domain.common import emb_key
 from munchhausen.domain.registers import RunRecord
 from munchhausen.metrics import readings as R
 
@@ -237,8 +238,13 @@ async def readings_for(h: Any, run_id: str) -> tuple[RunRecord, dict[str, Any]]:
     rows = await h.store.evidence.snapshot(run_id)
     spend = await h.store.evidence.spend_summary(run_id)
     ctx = reading_context(h.settings, run)
+    observations = {}
+    for arm, ports in (run.ports or {}).items():   # E8: the embedder key each arm registered
+        rep = ports.get("representation")
+        if rep:
+            observations[arm] = await h.store.evidence.observation_vectors(run_id, arm, emb_key(rep))
     out = R.all_readings(rows, ctx, spend=spend, events=read_events(h.settings.var_dir, run_id),
-                         priced=h.settings.model_prices_usd_per_mtok)
+                         priced=h.settings.model_prices_usd_per_mtok, observations=observations)
     if not run.forecast_register:
         out["note"] = "run record carries no forecast_register: forecasts read from the current conf (not registered)"
     return run, out

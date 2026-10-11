@@ -19,6 +19,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+import numpy as np
+
 from munchhausen.domain.arm import ArmSpec, ConsultationMode
 from munchhausen.domain.ids import decision_id as _decision_id
 from munchhausen.metrics.paired import PairedReading, difference_of_means, paired_difference
@@ -796,12 +798,76 @@ def unmetered(ctx: Context) -> list[Reading]:
                     note="these calls are not metered: spend readings exclude their cost and tokens")]
 
 
+def novelty_curve(obs: Sequence[Row]) -> list[dict[str, Any]]:
+    """E8 (exploratory, not pre-registered). For round r: `novelty(r)` = mean over the arm's reducible
+    observations written in round r of the minimum cosine distance to any of the arm's observations from rounds
+    < r. Round 0 (no earlier observation) is undefined and omitted. Input rows `{round, idx, vector}`."""
+    by_round: dict[int, list[np.ndarray]] = defaultdict(list)
+    for o in obs:
+        v = np.asarray(o["vector"], dtype=float)
+        n = np.linalg.norm(v)
+        if n > 0:
+            by_round[int(o["round"])].append(v / n)
+    out: list[dict[str, Any]] = []
+    prior: list[np.ndarray] = []
+    for r in sorted(by_round):
+        cur = by_round[r]
+        if prior:
+            p = np.vstack(prior)
+            d = [float(1.0 - np.max(p @ v)) for v in cur]
+            out.append({"round": r, "novelty": float(np.mean(d)), "n": len(cur), "n_prior": len(prior)})
+        prior.extend(cur)
+    return out
+
+
+def novelty_lead(curve: Sequence[Mapping[str, Any]], rows: Mapping[str, list[Row]], ctx: Context, arm: str, *,
+                 drift: str, prefix: str) -> Reading:
+    """Lead = (index of the first dispositive fire at or after the drift on a decision the planted map maps to
+    the drifting quirk) − (last index of the first round starting at or after the drift whose novelty exceeds
+    the pre-drift rounds' mean + 2 SD). Positive: novelty rose before the fire. `unread` if either side is
+    missing, fewer than 2 pre-drift rounds exist, or there is no planted map."""
+    at, _ = _drift(ctx, drift)
+    q = (f"munchhausen.observations.find({{run_id: R, arm: '{arm}', disposition: {{$ne: 'noise'}}, via: {{$ne: "
+         f"'injection'}}}}, {{round, episode_id, emb.<key>}}) + fires | metrics.readings.novelty_lead")
+    pop = f"novelty rounds of arm {arm}; dispositive fires of arm {arm} on {prefix} decisions at idx ≥ {at}"
+
+    def unread(why: str) -> Reading:
+        return Reading(f"E8.lead.{arm}", None, "episodes", pop, 0, q, note=f"exploratory, not pre-registered; {why}")
+
+    pre = [c["novelty"] for c in curve if (c["round"] + 1) * ctx.round_size <= at]
+    if len(pre) < 2:
+        return unread("fewer than 2 pre-drift novelty rounds")
+    thr = float(np.mean(pre) + 2 * np.std(pre, ddof=1))
+    alarm = next((c for c in curve if c["round"] * ctx.round_size >= at and c["novelty"] > thr), None)
+    pm = {k: m for k, m in mapping(rows).items() if m.get("subject", "decision") == "decision"}
+    if not pm:
+        return unread("no planted map: the Q1 fire cannot be identified")
+    fires = sorted(int(f["at_idx"]) for f in rows.get("fires", [])
+                   if f.get("arm") == arm and f.get("role") == "dispositive" and int(f.get("at_idx", -1)) >= at
+                   and quirk_matches(pm.get(f.get("decision_id"), {}).get("quirk"), prefix))
+    if alarm is None:
+        return unread(f"no round after the drift exceeds pre-drift mean + 2 SD ({thr:.3f})")
+    if not fires:
+        return unread("no dispositive fire on a decision mapped to the drifting quirk after the drift")
+    alarm_idx = (alarm["round"] + 1) * ctx.round_size - 1
+    return Reading(f"E8.lead.{arm}", float(fires[0] - alarm_idx), "episodes", pop, 1, q,
+                   note=(f"exploratory, not pre-registered; novelty alarm at round {alarm['round']} (idx {alarm_idx}, "
+                         f"novelty {alarm['novelty']:.3f} > {thr:.3f} = pre-drift mean + 2 SD over {len(pre)} rounds); "
+                         f"first fire at idx {fires[0]}"))
+
+
 # --- everything ---------------------------------------------------------------------------------------
 
 
 def all_readings(rows: Mapping[str, list[Row]], ctx: Context, *, spend: Sequence[Row] = (),
-                 events: Sequence[Row] = (), priced: Iterable[str] = ()) -> dict[str, Any]:
+                 events: Sequence[Row] = (), priced: Iterable[str] = (),
+                 observations: Mapping[str, Sequence[Row]] | None = None) -> dict[str, Any]:
     arms = [a for a in ctx.arms if any(e.get("arm") == a for e in rows.get("episodes", []))]
+    novelty = {a: novelty_curve(observations[a]) for a in arms if observations and observations.get(a)}
+    e8: list[Reading] = []
+    for d in ctx.drift_at:
+        q = ctx.drift_quirk.get(d, "")
+        e8 += [novelty_lead(novelty[a], rows, ctx, a, drift=d, prefix=q.split("_")[0] if q else d) for a in novelty]
     reference = next((str(e.get("read", {}).get("reference")) for e in ctx.forecasts.values()
                       if e.get("read", {}).get("reference")), "")
     curves = {a: stream_curve(rows, ctx, a) for a in arms}
@@ -820,6 +886,8 @@ def all_readings(rows: Mapping[str, list[Row]], ctx: Context, *, spend: Sequence
         "v_points": v,
         "reference": reference,
         "paired_curves": rolling_paired(rows, ctx, reference),
+        "novelty": novelty,
+        "round_size": ctx.round_size,
         "notes": list(ctx.notes),
         "forecasts": [read_forecast(fid, e, rows, ctx) for fid, e in ctx.forecasts.items()],
         "readings": [r.to_dict() for r in (summary + drift_rows + quirk_recall(rows, ctx)
@@ -827,7 +895,7 @@ def all_readings(rows: Mapping[str, list[Row]], ctx: Context, *, spend: Sequence
                                            + retrieval_lead(rows, ctx) + spend_readings(spend, rows, ctx, priced)
                                            + models_served_readings(spend) + lifecycle_counts(rows, ctx)
                                            + floor_readings(rows, ctx) + injection_readings(rows, ctx, events)
-                                           + sandbox_readings(rows, events, ctx) + unmetered(ctx))],
+                                           + sandbox_readings(rows, events, ctx) + unmetered(ctx) + e8)],
         "timeline": timeline(rows, ctx),
         "spend": list(spend),
     }

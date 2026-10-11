@@ -105,6 +105,12 @@ arm names live only in `conf/forecasts.yaml` (`read:` blocks).
   only), § 12 premise joined to the planted map of each draft (misses on the draft's quirk; unmapped drafts →
   PROXY), supersession audit (doctrine § 11.2), E9 (reads `matched_ids`), floor (rewires, view-filtered
   episodes), injection counts, spend, models served, guard refusals (from episodes' `error`), not-metered calls.
+- E8 (exploratory, not pre-registered): `novelty(a, r)` = mean over arm a's observations written in round r
+  (disposition ≠ noise, via ≠ injection) of the minimum cosine distance to any of a's observations from rounds
+  < r, on `emb.<key>` with the key from the arm's registered `representation` port; round 0 undefined; n per
+  round. **Lead** = (idx of the first dispositive fire at or after D1_AT on a decision mapped to the drifting
+  quirk) − (last idx of the first round starting at or after D1_AT whose novelty exceeds the pre-D1 rounds'
+  mean + 2 SD). `unread` without a fire, an alarm, ≥ 2 pre-D1 rounds, or the planted map.
 Verdicts: `above` / `within` / `below`; `unread` with no pairs or missing inputs; **`unread (proxy)`** whenever
 the population is a proxy (no planted map): a proxy never earns an agreement verdict.
 

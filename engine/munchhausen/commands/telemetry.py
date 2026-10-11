@@ -74,7 +74,8 @@ def register(app: typer.Typer) -> None:
         arms = s.arms()
         ctx = synthetic.context(arms, s.forecasts(), run_id="synthetic-demo")
         rows = synthetic.rows(arms, run_id="synthetic-demo")
-        readings = all_readings(rows, ctx, spend=synthetic.spend(arms), priced=s.model_prices_usd_per_mtok)
+        readings = all_readings(rows, ctx, spend=synthetic.spend(arms), priced=s.model_prices_usd_per_mtok,
+                                observations=synthetic.observations(arms))
         readings["note"] = "SYNTHETIC run: planted rows for rendering and tests; not evidence of anything"
         run = {"_id": "synthetic-demo", "started_at": "synthetic", "git_sha": "synthetic", "isolation": "convention",
                "pack_hash": "synthetic", "knobs": s.knobs()}
