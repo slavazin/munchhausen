@@ -317,3 +317,46 @@ def test_round_tokens_come_from_spend_or_null() -> None:
     p = json.dumps(round_pipeline("r", "governed", 3, (90, 120)))
     assert '"meta.episode_id"' in p and '"$tokens.in"' not in p
     assert '"tokens_in": {"$ifNull": ["$_tin", null]}' in p
+
+
+# --- readiness review: proposer errors are misses; E9 proxy; window labels ---------------------------------
+
+
+def test_proposer_execution_error_counts_as_a_miss(run: Any) -> None:
+    rows, ctx = run
+    rows = copy.deepcopy(rows)
+    eps = [e for e in rows["episodes"] if e["arm"] == "governed" and e["stream"] == "stream"]
+    hit = next(e for e in eps if e["correct"] and e["idx"] >= 300)
+    base_acc = {r.name: r for r in R.arm_summary(rows, ctx, "governed")}["governed.stream_accuracy"]
+    hit["error"], hit["correct"] = "empty result", False
+    after = {r.name: r for r in R.arm_summary(rows, ctx, "governed")}
+    assert after["governed.stream_accuracy"].n == base_acc.n                     # still scored
+    assert after["governed.stream_accuracy"].value < base_acc.value              # as a miss
+    assert after["governed.errored_episodes"].value == 0                         # not a harness failure
+    xa, _, idx, drop = R._pairs(rows, "governed", "naive", lambda e: True)
+    assert hit["idx"] in idx and xa[idx.index(hit["idx"])] == 0.0 and drop["error.governed"] == 0
+    hit["error"] = "episode_failed: TimeoutError"                                # a harness failure: excluded
+    _, _, idx, drop = R._pairs(rows, "governed", "naive", lambda e: True)
+    assert hit["idx"] not in idx and drop["error.governed"] == 1
+
+
+def test_round_pipeline_excludes_only_harness_failures() -> None:
+    p = json.dumps(round_pipeline("r", "governed", 3, (90, 120)))
+    assert '"$indexOfCP"' in p and '"episode_failed"' in p
+
+
+def test_e9_without_a_planted_map_is_unread_proxy(run: Any) -> None:
+    rows, ctx = run
+    out = {r.name: r for r in R.retrieval_lead({**rows, "planted_map": []}, ctx)}
+    e9 = out["E9.naive-over-governed"]
+    assert e9.status == "unread (proxy)" and e9.value is None
+    assert {r.name: r for r in R.retrieval_lead(rows, ctx)}["E9.naive-over-governed"].status is None
+
+
+def test_windows_never_labelled_past_the_last_index(s: Settings) -> None:
+    arms = s.arms()
+    rows = synthetic.rows(arms, run_length=240)
+    ctx = synthetic.context(arms, s.forecasts(), run_length=600)       # registered length longer than the run
+    curves = R.rolling_paired(rows, ctx, "frozen")
+    assert max(p["idx_hi"] for p in curves["governed"]) == 239
+    assert max(p["idx_hi"] for p in R.stream_curve(rows, ctx, "governed")) == 239

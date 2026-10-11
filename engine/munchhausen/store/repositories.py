@@ -21,6 +21,7 @@ from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
 from munchhausen.domain.registers import (
+    HARNESS_FAILURE_PREFIX,
     Cursor,
     EmbeddingCacheRow,
     PlantedMapping,
@@ -437,7 +438,8 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
     `usd_cum` = the arm's spend so far, `usd` = `usd_cum` − the previous round's `usd_cum`.
     The injection beat is excluded throughout: drafts with `source: injection`, observations with
     `via: injection`, spend with `meta.stage == inject_stage` (INJECT_STAGE) or `meta.source: injection`.
-    Accuracy, self-assessed accuracy and the gap exclude episodes with `error` (counted in `n_error`).
+    Accuracy, self-assessed accuracy and the gap exclude harness failures only (`error` starting
+    `HARNESS_FAILURE_PREFIX`), counted in `n_error`; a proposer execution error is a miss and stays in.
     Tokens (model calls only; embed/rerank are in usd) come from `spend` rows whose `meta.episode_id` is
     one of the round's stream episodes; with none
     attributed they are null, never 0."""
@@ -448,7 +450,7 @@ def round_pipeline(run_id: str, arm: str, round_: int, idx_range: tuple[int, int
     is_v = {"$and": [{"$eq": ["$stream", "v"]}, {"$gte": [v_at, lo]}, {"$lt": [v_at, hi]}]}
     in_idx = {"$and": [{"$gte": ["$idx", lo]}, {"$lt": ["$idx", hi]}]}
     stream_in = {"$and": [is_stream, in_idx]}
-    errored = {"$gt": [{"$ifNull": ["$error", None]}, None]}
+    errored = {"$eq": [{"$indexOfCP": [{"$ifNull": ["$error", ""]}, HARNESS_FAILURE_PREFIX]}, 0]}
     scored = {"$and": [stream_in, {"$not": [errored]}]}
 
     def when(cond: Any, val: Any) -> Doc:

@@ -43,7 +43,10 @@ def _signed(r: Mapping[str, Any]) -> bool:
 
 def sentence(r: Mapping[str, Any]) -> str:
     """One reading as one claim-language sentence: value, unit, interval, n, population."""
-    s = f"`{r['name']}` = {fmt(r.get('value'), signed=_signed(r))} {r['unit']}"
+    if r.get("status"):
+        s = f"`{r['name']}`: **{r['status']}** ({r['unit']})"
+    else:
+        s = f"`{r['name']}` = {fmt(r.get('value'), signed=_signed(r))} {r['unit']}"
     if r.get("interval"):
         lo, hi = r["interval"]
         s += f", {int(round(100 * r.get('level', 0)))}% interval [{fmt(lo)}, {fmt(hi)}]"
@@ -313,7 +316,8 @@ def html_report(readings: Mapping[str, Any], run: Mapping[str, Any], md_sentence
     parts.append("<h2>Readings</h2><div class='card tw'><table><tr><th>reading</th><th>value</th><th>n</th><th>population</th><th>query</th></tr>")
     for r in readings["readings"]:
         iv = f" [{fmt(r['interval'][0])}, {fmt(r['interval'][1])}]" if r.get("interval") else ""
-        parts.append(f"<tr><td><code>{e(r['name'])}</code></td><td>{e(fmt(r.get('value')))}{e(iv)} {e(r['unit'])}"
+        shown = r["status"] if r.get("status") else fmt(r.get("value")) + iv
+        parts.append(f"<tr><td><code>{e(r['name'])}</code></td><td>{e(shown)} {e(r['unit'])}"
                      f"{'<br><span class=mut>' + e(r['note']) + '</span>' if r.get('note') else ''}</td>"
                      f"<td>{r['n']}</td><td>{e(r['population'])}</td><td><code>{e(r['query'])}</code></td></tr>")
     parts.append("</table></div>")
