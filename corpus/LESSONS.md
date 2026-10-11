@@ -109,6 +109,24 @@ history does not show is marked *(log only)*. Each rule is a Do plus the oversho
 **Rule:** Do attribute a residual only when its sign and size match the decision's claim, and route persona-shaped residuals (a fixed rounding unit) to persona scope; Don't let any residual on a consulted decision count toward its trigger.
 **Mechanism:** to build, after the event. A test: a claire-rounded residual on an episode consulting an unrelated decision raises no fire on it.
 
+## 11. Shaping fragments a multi-template quirk below the bar (found in Run B)
+
+- governed's revenue (Q5) observations formed a 2-template shape in rounds 2–3 that failed the direction read on volume (n_in 4–6 < BAR_MIN_MATCHED 10); from round 4 the grouper split them into one-template shapes that can never reach BAR_MIN_TEMPLATES 2. 48 observations stayed open to the end; Q5 was never nominated (0/70 vs ungated 58/70).
+- Nothing re-merges shapes that share a quirk signature once they have split; Run A succeeded on the same quirk by grouping luck.
+
+**Caught:** Run B diagnosis from `shape.formed` / `bar.direction_read` events. **Cost:** a whole quirk lost to governed.
+**Rule:** Do let open observations on sibling templates (same collection + signature guess) pool into one shape before the bar is read; Don't let the grouper's first split be final.
+**Mechanism:** to build. A test: three one-template shapes with the same signature merge into one ≥ 2-template shape.
+
+## 12. A refusal returns its evidence unmarked (found in Run B)
+
+- governed drafted the tech-names set ~10 times from shapes where 18/77 observations carried a poisoned stale list; each draft had a wrong set and was refused (0 fixed). The refused draft's observations went back into the pool unchanged, so the next nomination read the same mix.
+- The backtest already knows which replays disagreed; that knowledge never reaches the shaper.
+
+**Caught:** Run B diagnosis (`bt_poison.py`, `obs_poison.py`). **Cost:** Q6 0/80 for governed vs ungated 49/80.
+**Rule:** Do mark observations whose figures the refused draft's consensus contradicts (outliers) and exclude them from the next nomination of that shape; Don't re-nominate from an unchanged pool.
+**Mechanism:** to build after the event; it is a one-way door for what "evidence" means, so it needs a SPEC note first.
+
 ## Brief template additions
 
 - "Your worktree may be cut from `main`. Run `git log -1 --format=%h` and `git merge-base --is-ancestor <seam-sha> HEAD`; on failure, `git reset --hard <seam-sha>`."

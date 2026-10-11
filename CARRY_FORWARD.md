@@ -113,7 +113,35 @@ backtest record yet" after the refusal (store has it). `why active_customer` →
 FETCH on `run_id_1_arm_1_lifecycle.status_1_kind_1`. Deck v11: slides 7–14 and 17 carry Run A numbers (text, not
 screenshots: browser-pane captures are too low-res for 1920px slides).
 
-**Run B** (adversarial authority) RUNNING since 15:17: `RUN_ID=run-b`, snapshot `60086e4` (`munch-run-b`),
+### 00d. Run B readings (16:10) — `report run-b --against run-a`, planted map done (273 Opus calls)
+
+Ended 15:54, exit 0: 4 arms × 600, 0 failed, 0 V holes, 20 rounds each. Evidence exported to `docs/evidence/run-b/`.
+Forecasts (registered at Run B start): F1 governed agrees (+0.158 [+0.078, +0.233]), ungated within (+0.130,
+held only 60 eps); **F2 disagrees again — 0 N1-derived decisions in every arm at poison 0.20**; F3 agrees; F4
+disagrees (ungated 60 vs governed 210); F5 agrees (+0.154 [+0.102, +0.205]); **F6 −0.472 [−0.524, −0.417]**;
+F7 within (controls 46/46 both). Stream accuracy: ungated 0.748, governed 0.478, naive 0.377, frozen 0.325.
+Spend: governed $7.51, naive $4.37, ungated $3.18. Full-run quirk table (correct/n), frozen/naive/ungated/governed:
+Q1 0/0/97/55 of 127; Q3 0/0/37/37 of 55; Q5 0/17/58/0 of 70; Q6 0/0/49/0 of 80; P1 108/126/121/108 of 181;
+controls 87/83/87/87 of 87.
+**Diagnosis of governed (scratchpad `bt_poison.py`, `obs_poison.py`, events):**
+1. Q5 never nominated: rounds 2–3 a 2-template revenue shape failed the direction read (n_in 4–6 < BAR_MIN_MATCHED
+   10); from round 4 the grouper split revenue observations into one-template shapes (`revenue_symbol`,
+   `revenue_symbol_year`, `revenue_month`), none can reach BAR_MIN_TEMPLATES 2 → 48 observations left open. Not
+   poison (6/48 poisoned): a shaping fragmentation; Run A happened to form a 3-template shape @240.
+2. Q6 drafted ~10× with wrong/vague sets ("seven-symbol", "nine-symbol", "roster, not ad hoc"), each refused
+   correctly (0 fixed). 18/77 of governed's Q6 observations carry the poisoned stale list; refusal returns the
+   observations to the pool without marking the inconsistent ones, so the next nomination re-reads the same mix.
+3. Poison barely touches the backtest itself (poisoned samples scattered, never decisive).
+**Why ungated is not hurt:** per-episode random poison never forms a coherent wrong rule; the nominator writes
+from the majority of a shape, so no arm admitted a poison-derived decision. The gate's protective case — a
+drafted lie — does not arise from N1 in this world; it arises only from injection (the demo beat). Honest
+headline: in both runs the gate cost accuracy and (Run B) money, and its protection was never exercised by the
+organic stream.
+**Decision-induced regressions** (exploratory, `regress.py`: applied ≥1 decision, wrong where frozen right):
+Run A naive 5, ungated 0, governed 5 (controls, hook overreach); Run B naive 4, ungated 8 (all P1), governed 0.
+Helped (right where frozen wrong): Run A ungated 204 / governed 158; Run B ungated 229 / governed 78.
+
+**Run B** (adversarial authority) launched 15:17, DONE 15:54: `RUN_ID=run-b`, snapshot `60086e4` (`munch-run-b`),
 `AUTHORITY_POISON_RATE=0.20`, `CONF_DIR=<munch-run-b>/engine/conf/run-b` (forecasts F1–F7 registered; F2 = governed
 admits 0 N1-derived, naive and ungated ≥1; F7 = governed − ungated on controls after round 10), arms frozen, naive,
 ungated, governed, `TRACE_IMPL=jsonl`, other knobs as Run A learning arms. Log `var/runs/run-b.log`. ETA ~15:55–16:05.
