@@ -99,20 +99,32 @@ class Nominator:
         scored.sort(key=lambda p: (-p[1], p[0].id))
         return scored[: self.neighbour_k]
 
-    async def residuals(self, run_id: str, arm: str, decision: Decision) -> list[Residual]:
+    async def residuals(self, run_id: str, arm: str, decision: Decision) -> tuple[list[Residual], list[str]]:
+        """A neighbour's recent residuals, and the episodes they come from (the nominator has seen those)."""
         eps = await self.episodes.consultations_of(run_id, arm, decision.id, self.residual_window)
-        return [r for e in eps for r in e.residuals if r.decision_id == decision.id]
+        rows = [(r, e.id) for e in eps for r in e.residuals if r.decision_id == decision.id]
+        return [r for r, _ in rows], sorted({eid for _, eid in rows})
 
-    async def nominate(self, run_id: str, arm: str, round_: int, shape: Shape,
-                       members: Sequence[Observation]) -> Nomination:
+    async def nominate(self, run_id: str, arm: str, round_: int, shape: Shape, members: Sequence[Observation],
+                       neighbours: Sequence[tuple[Decision, float]] | None = None) -> Nomination:
         episodes: list[Episode] = [e for e in [await self.episodes.get(i) for i in shape.episode_ids] if e]
-        neighbours = await self.neighbours(run_id, arm, shape, members)
+        if neighbours is None:
+            neighbours = await self.neighbours(run_id, arm, shape, members)
+        residuals: dict[str, tuple[Residual, ...]] = {}
+        seen: set[str] = set(shape.episode_ids)
+        for d, _ in neighbours:
+            rs, eids = await self.residuals(run_id, arm, d)
+            residuals[d.id] = tuple(rs)
+            seen.update(eids)
         inp = NominatorInput(
             shape=shape, sources=tuple(members), episodes=tuple(episodes),
             vocabulary=tuple(t.term for t in await self.terms.all()), world=self.world,
-            neighbours=tuple(d for d, _ in neighbours),
-            neighbour_residuals={d.id: tuple(await self.residuals(run_id, arm, d)) for d, _ in neighbours})
-        entry, new_terms = await self.models.nominate(inp)
+            neighbours=tuple(d for d, _ in neighbours), neighbour_residuals=residuals)
+        try:
+            entry, new_terms = await self.models.nominate(inp)
+        finally:
+            for row in inp.run_log:   # every world-tool run, accepted or not
+                self._event("nominator.run", {"arm": arm, "round": round_, "shape_id": shape.id, **row})
 
         did_ = draft_id(run_id, arm, round_, shape.id)
         entry = with_latch_ids(entry, decision_id(did_))
@@ -126,7 +138,8 @@ class Nominator:
         draft = Draft(
             _id=did_, run_id=run_id, arm=arm, **{f: getattr(entry, f) for f in EntryContract.model_fields},
             shape_id=shape.id, source_observation_ids=shape.observation_ids, new_terms=tuple(new_terms),
-            route=Route.SUPERSEDE if supersedes else Route.NEW, supersedes=supersedes, round=round_)
+            route=Route.SUPERSEDE if supersedes else Route.NEW, supersedes=supersedes, round=round_,
+            nominator_seen_episode_ids=tuple(sorted(seen)))
         return Nomination(draft=draft, neighbours=tuple(neighbours))
 
     def _event(self, name: str, payload: dict[str, object]) -> None:

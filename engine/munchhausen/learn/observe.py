@@ -34,6 +34,8 @@ from munchhausen.ports.sinks import Trace
 from munchhausen.ports.store import ObservationRepository
 
 MASK_TOKEN = "_"
+NOISE_FILTER = "noise_filter"   # disposed_by: mechanical noise (execution error, no answer read)
+OBSERVER = "observer"           # disposed_by: noise the observer model classed irreducible
 
 
 def mechanical_noise(episode: Episode) -> ObservationNote | None:
@@ -71,6 +73,8 @@ class Observer:
             return []
         noise = mechanical_noise(episode)
         notes = [noise] if noise is not None else list(await self.models.observe(episode))
+        if not notes:
+            self._event("observation.none", {"episode_id": episode.id})
         kept: list[ObservationNote] = []
         for note in notes:
             problems = lint_noticed(note.noticed)
@@ -97,7 +101,7 @@ class Observer:
                 retry_pipeline=episode.retry_pipeline, retry_correct=episode.retry_correct,
                 signature_guess=note.signature_guess, re_check_when=note.re_check_when,
                 disposition=ObservationDisposition.NOISE if noise_class else ObservationDisposition.OPEN,
-                disposed_by="noise_filter" if noise_class else None, round=round_,
+                disposed_by=(NOISE_FILTER if note is noise else OBSERVER) if noise_class else None, round=round_,
                 rep={"embedder_id": self.representation.id} if emb else {}, emb=emb)
             await self.observations.put(obs)
             self._event("observation.written", {"id": obs.id, "episode_id": episode.id,
