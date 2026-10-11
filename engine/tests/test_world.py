@@ -313,3 +313,45 @@ async def test_schema_summary_is_names_and_types_only() -> None:
         forbidden |= {str(x).lower() for v in p.params.values() for x in (v if isinstance(v, list) else [v])}
     leaked = forbidden & tokens
     assert not leaked, leaked
+
+
+async def test_schema_notes_are_storage_facts_never_quirk_fields_or_definitions() -> None:
+    """Schema-summary notes (pilot gate): listed values only for allowlisted non-quirk fields, and never a
+    value a quirk's params, drift or the poison bank carry unless the question texts themselves state it
+    (`buy`/`sell` in "How many sell trades…"); no note on any field a quirk writes or defines; no definition,
+    prior trap or phrasing in any note."""
+    store = FakeStore()
+    w = PackWorld.create("pack", S, store)  # type: ignore[arg-type]
+    await w.build(S.world_seed)
+    notes = w.schema_summary().notes
+    assert notes["transactions"]["transactions.transaction_code"] == "values: buy, sell"
+    assert notes["transactions"]["transactions.price"] == "numbers stored as text"
+    # Fields a quirk writes carry no note at all; fields a quirk's gold reads (e.g. Q6's `symbol`) may carry a
+    # storage note such as `lowercase`, never listed values.
+    written = {str(v) for q in PACK.quirks if q.materialize
+               for k, v in q.materialize.params.items() if k in {"field", "decoy_field"}}
+    read = {str(v) for q in PACK.quirks if q.gold for k, v in q.gold.params.items() if k == "field"}
+    assert {"st", "rs", "deleted_at"} <= written and "symbol" in read
+    noted = {path.rsplit(".", 1)[-1] for fields in notes.values() for path in fields}
+    assert not written & noted, written & noted
+    valued = {path.rsplit(".", 1)[-1] for fields in notes.values() for path, n in fields.items()
+              if n.startswith("values: ")}
+    assert not (written | read) & valued, (written | read) & valued
+    assert not {f.rsplit(".", 1)[-1] for f in S.schema_value_fields} & (written | read)
+    text = " ".join(n for fields in notes.values() for n in fields.values()).lower()
+    for q in PACK.quirks:
+        for sentence in (q.definition, q.prior_trap, *q.authority_phrasings):
+            assert not sentence or sentence.lower() not in text, sentence
+    values = {v.strip().lower() for fields in notes.values() for n in fields.values() if n.startswith("values: ")
+              for v in n.removeprefix("values: ").split(",")}
+    carried: set[str] = set()
+    for q in PACK.quirks:
+        for ref in (q.materialize, q.gold):
+            carried |= {str(x).lower() for v in (ref.params.values() if ref else ())
+                        for x in (v if isinstance(v, list) else [v])}
+        carried |= {str(x).lower() for d in q.drift for v in d.gold_params.values()
+                    for x in (v if isinstance(v, list) else [v])}
+    for p in PACK.poison_bank:
+        carried |= {str(x).lower() for v in p.params.values() for x in (v if isinstance(v, list) else [v])}
+    stated = set(re.findall(r"[a-z0-9_]+", " ".join(t.text.lower() for t in PACK.templates)))
+    assert not (values & carried) - stated, (values & carried) - stated

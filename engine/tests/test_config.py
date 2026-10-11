@@ -8,7 +8,7 @@ def test_seed_knobs_match_spec(settings_offline: Settings) -> None:
     s = settings_offline
     assert (s.world_seed, s.run_length, s.d1_at, s.d2_at, s.round_size) == (7, 900, 300, 600, 30)
     assert (s.backtest_min_fixed, s.backtest_max_broken, s.backtest_min_fixed_heldout) == (2, 1, 1)
-    assert s.proposer_model == "claude-haiku-4-5" and s.nominator_model == "claude-sonnet-5-5"
+    assert s.proposer_model == "claude-haiku-5-5" and s.nominator_model == "claude-sonnet-5-5"
 
 
 def test_arms_load(settings_offline: Settings) -> None:

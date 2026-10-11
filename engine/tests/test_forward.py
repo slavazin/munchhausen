@@ -465,7 +465,9 @@ def test_proposer_prompt_keeps_learned_content_out_of_the_always_loaded_set(sett
     assert d.payload not in llm.kwargs["system"] and d.id not in llm.kwargs["system"]
     assert "st: int" in llm.kwargs["system"] and d.payload in llm.kwargs["user"]
     assert "Apply each one whose hook matched" in llm.kwargs["user"]
-    assert llm.kwargs["temperature"] == settings_offline.proposer_temperature == 0.0
+    assert llm.kwargs["temperature"] == settings_offline.proposer_temperature is None   # haiku-5-5 refuses it
+    p0 = run(proposer_party.run(llm, settings_offline.model_copy(update={"proposer_temperature": 0.0}), inp))
+    assert llm.kwargs["temperature"] == 0.0 and p0.pipeline == [{"$count": "n"}]
     assert p.consulted == (Consultation(decision_id="D-1", disposition=Disposition.CONSIDERED_NOT_APPLICABLE),)
     assert p.confidence == 1.0 and p.pipeline == [{"$count": "n"}]
     assert proposer_party.system_prompt(SCHEMA) == llm.kwargs["system"]   # stable: hashable per run
@@ -479,8 +481,8 @@ def test_retry_prompt_carries_the_authority_figure_and_phrasing(settings_offline
 
 
 def test_an_unparseable_pipeline_becomes_a_refused_stage() -> None:
-    assert proposer_party._pipeline("not json") == [{"$unparsed": "not json"}]
-    assert proposer_party._pipeline('{"$count": "n"}') == [{"$count": "n"}]
+    assert proposer_party._pipeline("not json") == ([{"$unparsed": "not json"}], ())
+    assert proposer_party._pipeline('{"$count": "n"}') == ([{"$count": "n"}], ())
 
 
 # --- the term vocabulary ---------------------------------------------------------------------------------

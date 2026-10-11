@@ -105,7 +105,7 @@ class AnthropicModels:
         kwargs: dict[str, Any] = {}
         if effort:
             kwargs["output_config"] = {"effort": effort}
-        if temperature is not None:
+        if temperature is not None:   # `messages.parse` has no sampling params; the body field is honoured
             kwargs["extra_body"] = {"temperature": temperature}
         t0 = time.monotonic()
         try:

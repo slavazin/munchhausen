@@ -110,6 +110,7 @@ class ForwardPass:
             residuals=residuals, error=error, latency_ms=int((time.monotonic() - t0) * 1000), stream=stream,
             collections=question.collections, v_at=at if stream == V else None,
             matched_ids=tuple(d.id for d in consulted),
+            pipeline_repairs=proposal.repairs,
         )
         await self.store.episodes.put(episode)
         self.trace.event("episode_written", {**ids, "correct": episode.correct, "error": error,

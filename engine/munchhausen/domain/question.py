@@ -30,3 +30,6 @@ class SchemaSummary(Value):
     """Field names and types per logical collection; never meanings (SPEC § 4.1)."""
 
     collections: dict[str, dict[str, str]]
+    # Per collection, per field path: a storage-fidelity note (the values of an allowlisted low-cardinality
+    # field, or that text is stored lowercase). Never a meaning; never on a field a quirk writes.
+    notes: dict[str, dict[str, str]] = {}
