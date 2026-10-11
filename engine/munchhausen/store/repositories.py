@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
-from pymongo import ReturnDocument
+from pymongo import ReplaceOne, ReturnDocument
 from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError, OperationFailure
@@ -22,7 +22,9 @@ from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
 from munchhausen.domain.registers import (
     Cursor,
+    EmbeddingCacheRow,
     PlantedMapping,
+    RerankCacheRow,
     RoundRecord,
     RunRecord,
     SpendRow,
@@ -575,6 +577,34 @@ class AtlasSpend:
         await self._c.insert_one(to_doc(row))
 
 
+class _AtlasCache[M: BaseModel]:
+    """A run-independent cache keyed by a content hash `_id`: bulk read, unordered idempotent upserts."""
+
+    model: type[M]
+
+    def __init__(self, coll: AsyncCollection[Doc]) -> None:
+        self._c = coll
+
+    async def get_many(self, ids: Sequence[str]) -> dict[str, M]:
+        if not ids:
+            return {}
+        return {d["_id"]: self.model.model_validate(d) async for d in self._c.find({"_id": {"$in": list(ids)}})}
+
+    async def put_many(self, rows: Sequence[M]) -> None:
+        if not rows:
+            return
+        docs = [to_doc(r) for r in rows]
+        await self._c.bulk_write([ReplaceOne({"_id": d["_id"]}, d, upsert=True) for d in docs], ordered=False)
+
+
+class AtlasEmbeddingCache(_AtlasCache[EmbeddingCacheRow]):
+    model = EmbeddingCacheRow
+
+
+class AtlasRerankCache(_AtlasCache[RerankCacheRow]):
+    model = RerankCacheRow
+
+
 class AtlasLenses:
     def __init__(self, entries: AsyncCollection[Doc], weights: AsyncCollection[Doc], seed: LensWeights) -> None:
         self._entries, self._weights, self._seed = entries, weights, seed
@@ -604,6 +634,8 @@ def repositories(db: AsyncDatabase[Doc], lease_ttl_s: int, seed_weights: LensWei
         "runs": AtlasRuns(db[C.RUNS.value], db[C.ROUNDS.value], db[C.EPISODES.value]),
         "evidence": AtlasEvidence(db),
         "spend": AtlasSpend(db[C.SPEND.value]),
+        "embedding_cache": AtlasEmbeddingCache(db[C.EMBEDDING_CACHE.value]),
+        "rerank_cache": AtlasRerankCache(db[C.RERANK_CACHE.value]),
         "lenses": AtlasLenses(db[C.LENSES.value], db[C.LENS_WEIGHTS.value], seed_weights),
     }
 

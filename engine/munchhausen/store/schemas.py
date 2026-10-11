@@ -16,7 +16,16 @@ from munchhausen.domain.draft import Draft
 from munchhausen.domain.episode import Episode
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.observation import Observation
-from munchhausen.domain.registers import Cursor, Lease, RoundRecord, RunRecord, Term, ToolAccess
+from munchhausen.domain.registers import (
+    Cursor,
+    EmbeddingCacheRow,
+    Lease,
+    RerankCacheRow,
+    RoundRecord,
+    RunRecord,
+    Term,
+    ToolAccess,
+)
 from munchhausen.store.names import C
 
 MODELS: dict[C, type[BaseModel]] = {
@@ -32,6 +41,8 @@ MODELS: dict[C, type[BaseModel]] = {
     C.RUNS: RunRecord,
     C.TERMS: Term,
     C.LEASES: Lease,
+    C.EMBEDDING_CACHE: EmbeddingCacheRow,
+    C.RERANK_CACHE: RerankCacheRow,
 }
 
 _BSON = {

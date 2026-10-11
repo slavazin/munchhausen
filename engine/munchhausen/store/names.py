@@ -23,6 +23,8 @@ class C(StrEnum):
     TERM_SYNONYMS = "term_synonyms"
     LEASES = "leases"
     SPEND = "spend"
+    EMBEDDING_CACHE = "embedding_cache"   # additive: run-independent Voyage embedding cache
+    RERANK_CACHE = "rerank_cache"         # additive: run-independent Voyage rerank cache
 
 
 WORLD_TRUTH = "world_truth"   # lives in the `truth` database, readable by the evaluator role only

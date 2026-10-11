@@ -55,6 +55,9 @@ class Harness:
                 log.warning("[%s] port %s: %r needs %s, which is not set; using %r", arm, port, wanted,
                             registry.REQUIRES_KEY[port][wanted].upper(), name)
             cache[port] = build_port(port, name, self.settings, self.store)
+            bind = getattr(cache[port], "bind_arm", None)   # metered ports stamp their arm on spend rows
+            if callable(bind):
+                bind(arm)
         return cache[port]
 
     def shared(self, port: str, name: str) -> Any:

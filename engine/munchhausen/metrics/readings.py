@@ -789,9 +789,10 @@ def lifecycle_counts(rows: Mapping[str, list[Row]], ctx: Context) -> list[Readin
 
 
 def unmetered(ctx: Context) -> list[Reading]:
-    """Disclosure: calls the shared call path does not meter (no cheap hook in this build)."""
-    return [Reading("spend.not_metered", ["voyage embed", "voyage rerank", "typesafe lens panel"], "call kinds",
-                    "model calls outside the Anthropic call path", 0, "none: not recorded in spend",
+    """Disclosure: calls no call path meters (no cheap hook in this build). Voyage embed and rerank are metered
+    by `impl/voyage.py` (stages EMBED_STAGE / RERANK_STAGE; cache hits write no row)."""
+    return [Reading("spend.not_metered", ["typesafe lens panel"], "call kinds",
+                    "model calls outside the Anthropic and Voyage call paths", 0, "none: not recorded in spend",
                     note="these calls are not metered: spend readings exclude their cost and tokens")]
 
 
