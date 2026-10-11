@@ -252,7 +252,7 @@ class EpisodicPass:
     async def _shape(self, run_id: str, arm: str, round_: int, shape: Shape, members: list[Observation],
                      held: Sequence[Draft], at_idx: int, report: PassReport) -> None:
         neighbours = await self.nominator.neighbours(run_id, arm, shape, members)
-        drift_from = await self._drift_start(neighbours)
+        drift_from = await self._drift_start(neighbours, shape, members)
         if drift_from is not None:
             shape, members = await self._after_drift(arm, round_, shape, members, drift_from)
             if not members:
@@ -385,15 +385,31 @@ class EpisodicPass:
 
     # --- steps ---------------------------------------------------------------------------------------
 
-    async def _drift_start(self, neighbours: Sequence[tuple[Any, float]]) -> int | None:
-        """The nearest contested neighbour's earliest open dispositive fire, dated by the first stream
-        index of the episodes behind it (the fire's own `at_idx` if they cannot be read)."""
-        if self.fires is None:
+    async def _about(self, decision: Any, shape: Shape, members: Sequence[Observation]) -> bool:
+        """A contested decision is about this shape when its hook shares a normalized term with the shape's
+        shared terms; for a shape with no shared term, when it shares a collection and the decision's
+        source episodes overlap the shape's templates."""
+        fw = decision.hook.fires_when
+        if shape.terms:
+            return bool({norm(t) for t in fw.terms} & {norm(t) for t in shape.terms})
+        collections = {o.surfaces.collection for o in members if o.surfaces.collection}
+        if not set(fw.collections) & collections:
+            return False
+        sources = [await self.episodes.get(i) for i in decision.warrant.source_episode_ids]
+        return bool({e.template for e in sources if e is not None} & set(shape.templates))
+
+    async def _drift_start(self, neighbours: Sequence[tuple[Any, float]], shape: Shape,
+                           members: Sequence[Observation]) -> int | None:
+        """The drift window applies only when the nearest neighbour (rank 1) is contested and about this
+        shape (`_about`). It starts at that neighbour's earliest open dispositive fire, dated by the first
+        stream index of the episodes behind it (the fire's own `at_idx` if they cannot be read). A contested
+        decision further down the neighbour list says nothing about this shape's evidence."""
+        if self.fires is None or not neighbours:
             return None
-        contested = [d for d, _ in neighbours if d.evidence_state is EvidenceState.CONTESTED]
-        if not contested:
+        nearest = neighbours[0][0]
+        if nearest.evidence_state is not EvidenceState.CONTESTED or not await self._about(nearest, shape, members):
             return None
-        fires = [f for f in await self.fires.open_for(contested[0].id)
+        fires = [f for f in await self.fires.open_for(nearest.id)
                  if f.role is FireRole.DISPOSITIVE and f.disposition is FireDisposition.OPEN]
         if not fires:
             return None

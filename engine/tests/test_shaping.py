@@ -921,3 +921,27 @@ def test_self_blocking_not_this_is_refused_and_a_clean_hook_is_accepted() -> Non
     assert hook_reaches(hook, [keys]) == [0]
     clean = nominator_party.DraftWire.model_validate({**smoke2, "not_this": SUBMIT["not_this"]})
     assert nominator_party.submission_problems(clean, session) == []
+
+
+# --- drift window only for a contested neighbour about this shape (rehearsal-1) ------------------------
+
+
+def test_drift_window_applies_only_to_a_rank_one_contested_neighbour_about_the_shape() -> None:
+    hot = decision("D-hot", EvidenceState.CONTESTED)                       # a Q1 decision: "active customers"
+    fire = Fire(_id="F", run_id="r", arm="a", decision_id="D-hot", latch="T-D-hot-1", role=FireRole.DISPOSITIVE,
+                cause=FireCause.RESIDUALS, episode_ids=("r:a:e305",), at_idx=320)
+    p, *_ = build(GAP, Verdict.ADMIT, [], fires=Fires([fire]))
+    q3 = [obs("o1", "r:a:e41", terms=("accounts",)), obs("o2", "r:a:e70", template="t2", terms=("accounts",)),
+          obs("o3", "r:a:e99", template="t3", terms=("accounts",))]
+    q1 = [obs("o4", "r:a:e310"), obs("o5", "r:a:e330", template="t2")]
+    clear_a, clear_b = decision("D-a", EvidenceState.CLEAR), decision("D-b", EvidenceState.CLEAR)
+    # Q3 shape, contested Q1 decision third among its neighbours: no window, members kept
+    assert run(p._drift_start([(clear_a, 0.9), (clear_b, 0.8), (hot, 0.7)], shape_of(q3), q3)) is None
+    # even at rank 1, a contested decision whose hook shares no term with the shape is not about it
+    assert run(p._drift_start([(hot, 0.9)], shape_of(q3), q3)) is None
+    # Q1 shape whose nearest neighbour is the contested Q1 decision: windowed from the fire
+    assert run(p._drift_start([(hot, 0.9), (clear_a, 0.5)], shape_of(q1), q1)) == 305
+    # no shared term: a shared collection and overlapping source templates make it about the shape
+    loose = [obs("o6", "r:a:e310", terms=("x",)), obs("o7", "r:a:e330", template="t2", terms=("y",))]
+    assert shape_of(loose).terms == frozenset()
+    assert run(p._drift_start([(hot, 0.9)], shape_of(loose), loose)) == 305
