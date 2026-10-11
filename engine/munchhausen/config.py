@@ -211,6 +211,12 @@ class Settings(BaseSettings):
         "claude-haiku-5-5": {"in": 0.10, "out": 0.50, "cache_read": 0.01, "cache_write": 0.125},
         "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_read": 0.20, "cache_write": 2.50},
         "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_read": 0.20, "cache_write": 5.0},
+        # Voyage: tokens_in = the API's `total_tokens`. Assumed list rates (voyage-4 family as voyage-3.5;
+        # rerank-3 as rerank-2.5), not read from an invoice: verify before quoting a Voyage figure.
+        "voyage-4": {"in": 0.06, "out": 0.0},
+        "voyage-4-lite": {"in": 0.02, "out": 0.0},
+        "rerank-3": {"in": 0.05, "out": 0.0},
+        "rerank-3-lite": {"in": 0.02, "out": 0.0},
     }
     response_cache: bool = False        # cache parsed model responses under var/cache/ (trace-invariance replay)
     planted_map_concurrency: int = 4    # concurrent planted-map judge calls (evaluation only)
@@ -232,6 +238,22 @@ class Settings(BaseSettings):
     embed_model: str = "voyage-4"
     embed_dim: int = 1024
     rerank_model: str = "rerank-3"
+    # Voyage call path (impl/voyage.py): content-hash caches in Atlas, micro-batching, retries, spend rows.
+    embed_cache: bool = True            # read/write `embedding_cache` before calling the embedder
+    rerank_cache: bool = True           # read/write `rerank_cache` before calling the reranker
+    embed_batch_window_ms: int = 25     # concurrent embed calls (same input type) coalesce for up to this long
+    embed_batch_max: int = 128          # texts per embed request (Voyage allows 1000)
+    embed_batch_max_tokens: int = 100_000   # estimated tokens per embed request (Voyage caps at 120K or more)
+    embed_chars_per_token: float = 3.0  # token estimate for the batch cap (conservative: English runs ~4)
+    voyage_max_retries: int = 6         # retries of a transient failure (429, 5xx, timeout, connection)
+    voyage_retry_max_wait_s: float = 120.0   # total backoff budget per call; beyond it the error raises
+    voyage_retry_base_s: float = 1.0    # exponential backoff base (full jitter); `retry-after` wins when sent
+    voyage_retry_cap_s: float = 30.0    # one backoff sleep never exceeds this
+    voyage_retry_statuses: tuple[int, ...] = (429, 500, 502, 503, 504)
+    voyage_timeout_s: float = 60.0      # per-request timeout handed to the Voyage client
+    embed_stage: str = "embed"          # spend `meta.stage` of Voyage embed calls
+    rerank_stage: str = "rerank"        # spend `meta.stage` of Voyage rerank calls
+    voyage_unattributed_arm: str = "unattributed"   # spend `meta.arm` when the instance serves no single arm
     model_max_retries: int = 4
 
     # --- global port selections (per-arm overrides live in conf/arms.yaml) ---------------------------

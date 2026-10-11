@@ -132,6 +132,35 @@ class SpendRow(Value):
     served_model: str | None = None            # the model id the API reports it served (`message.model`)
 
 
+class EmbeddingCacheRow(Value):
+    """One cached embedding (`embedding_cache`). Run-independent: the key names the embedder, dimension and
+    input type, so a changed embedder never reads another's vectors (SPEC § 24.1 E10). One-way door: `_id` =
+    sha256 of the compact JSON array `[embedder_id, dim, input_type, text]` (`impl/voyage.embed_cache_key`)."""
+
+    id: str = Field(alias="_id")
+    embedder_id: str
+    dim: int
+    input_type: str
+    text_hash: str                            # sha256 of the text
+    vector: tuple[float, ...]
+    at: datetime
+
+
+class RerankCacheRow(Value):
+    """One cached rerank (`rerank_cache`). `_id` = sha256 of the compact JSON array
+    `[model, query, [sha256(doc)…], top_k]` (`impl/voyage.rerank_cache_key`). `indices`/`scores` are the
+    result pairs in the order the reranker returned them (most relevant first)."""
+
+    id: str = Field(alias="_id")
+    model: str
+    query_hash: str
+    doc_hashes: tuple[str, ...]
+    top_k: int | None
+    indices: tuple[int, ...]
+    scores: tuple[float, ...]
+    at: datetime
+
+
 class PlantedMapping(Value):
     """Evaluation-only planted-truth map (SPEC § 11): one admitted decision → a quirk id or none."""
 

@@ -20,7 +20,17 @@ from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
 from munchhausen.domain.question import QuestionKeys
-from munchhausen.domain.registers import Cursor, PlantedMapping, RoundRecord, RunRecord, SpendRow, Term, ToolAccess
+from munchhausen.domain.registers import (
+    Cursor,
+    EmbeddingCacheRow,
+    PlantedMapping,
+    RerankCacheRow,
+    RoundRecord,
+    RunRecord,
+    SpendRow,
+    Term,
+    ToolAccess,
+)
 
 # --- the `world` database ---------------------------------------------------------------------------
 
@@ -318,6 +328,26 @@ class SpendRepository(Protocol):
 
 
 @runtime_checkable
+class EmbeddingCacheRepository(Protocol):
+    """Run-independent embedding cache, keyed by `EmbeddingCacheRow.id` (embedder id, dim, input type, text)."""
+
+    async def get_many(self, ids: Sequence[str]) -> dict[str, EmbeddingCacheRow]: ...
+
+    async def put_many(self, rows: Sequence[EmbeddingCacheRow]) -> None:
+        """Idempotent upserts, unordered."""
+        ...
+
+
+@runtime_checkable
+class RerankCacheRepository(Protocol):
+    """Run-independent rerank cache, keyed by `RerankCacheRow.id` (model, query, document hashes, top_k)."""
+
+    async def get_many(self, ids: Sequence[str]) -> dict[str, RerankCacheRow]: ...
+
+    async def put_many(self, rows: Sequence[RerankCacheRow]) -> None: ...
+
+
+@runtime_checkable
 class LensRepository(Protocol):
     async def entries(self) -> list[LensEntry]: ...
 
@@ -345,6 +375,8 @@ class Store(Protocol):
     spend: SpendRepository
     lenses: LensRepository
     evidence: EvidenceRepository              # M4 (additive): readings and the planted map
+    embedding_cache: EmbeddingCacheRepository # additive: Voyage embedding cache (run-independent)
+    rerank_cache: RerankCacheRepository       # additive: Voyage rerank cache (run-independent)
 
     def world(self) -> DocumentReader:
         """The `world` database as the read-only executor user."""
