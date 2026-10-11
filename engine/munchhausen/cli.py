@@ -1,4 +1,4 @@
-"""`munchhausen` CLI (typer). M0 commands: doctor, ping, setup, arms."""
+"""`munchhausen` CLI (typer). M0 commands: doctor, ping, setup, arms; surfaces add theirs in `commands/`."""
 
 from __future__ import annotations
 
@@ -63,6 +63,11 @@ def setup() -> None:
 def arms() -> None:
     """List arm specs and their port selections."""
     _print({name: spec.model_dump() for name, spec in settings().arms().items()})
+
+
+from munchhausen.commands import register as _register  # noqa: E402
+
+_register(app)
 
 
 if __name__ == "__main__":

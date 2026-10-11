@@ -21,7 +21,9 @@ from munchhausen.domain.episode import Consultation, Episode, Proposal
 from munchhausen.domain.lesson import Lesson
 from munchhausen.domain.observation import Observation, ObservationNote
 from munchhausen.domain.registers import SpendRow
+from munchhausen.impl import parties
 from munchhausen.impl._base import key
+from munchhausen.impl.parties import lesson, nominator, observer, planted_map, proposer, self_grade  # noqa: F401
 from munchhausen.ports.models import NominatorInput, ProposerInput, SelfGrade
 from munchhausen.ports.store import SpendRepository
 
@@ -55,38 +57,40 @@ class AnthropicModels:
     def __init__(self, settings: Settings, spend: SpendRepository | None = None) -> None:
         from anthropic import AsyncAnthropic
 
-        self._client = AsyncAnthropic(api_key=key(settings, "anthropic_api_key"),
+        self.client = AsyncAnthropic(api_key=key(settings, "anthropic_api_key"),
                                       max_retries=settings.model_max_retries)
         self._s = settings
         self._spend = spend
 
+    # --- port methods: each delegates to its party module (impl/parties/) ---------------------------
+
     async def propose(self, inp: ProposerInput) -> Proposal:
-        raise NotImplementedError("M2: proposer prompt (consultation language, § 22.6) → ProposalWire")
+        return await parties.proposer.run(self, self._s, inp)
 
     async def observe(self, episode: Episode) -> list[ObservationNote]:
-        raise NotImplementedError("M3: observer prompt compiled from § 23.1")
+        return await parties.observer.run(self, self._s, episode)
 
     async def nominate(self, inp: NominatorInput) -> tuple[EntryContract, tuple[str, ...]]:
-        raise NotImplementedError("M3: nominator with the read-only world tool; runs the prior option first")
+        return await parties.nominator.run(self, self._s, inp)
 
     async def lesson(self, episode: Episode, observation: Observation) -> Lesson:
-        raise NotImplementedError("M3: naive lesson writer (NAIVE_LESSON_MODEL) → Lesson")
+        return await parties.lesson.run(self, self._s, episode, observation)
 
     async def self_grade(self, episode: Episode) -> SelfGrade:
-        raise NotImplementedError("M3: self_ref self-grade as 'the subject-matter expert'")
+        return await parties.self_grade.run(self, self._s, episode)
 
     async def planted_map(self, decision: Decision, pack_definitions: str) -> str | None:
-        raise NotImplementedError("M4: evaluation-only planted-truth judge")
+        return await parties.planted_map.run(self, self._s, decision, pack_definitions)
 
     # --- shared call path --------------------------------------------------------------------------
 
-    async def _parse(self, *, stage: str, arm: str, model: str, system: str, user: str, wire: type[W],
+    async def parse(self, *, stage: str, arm: str, model: str, system: str, user: str, wire: type[W],
                      effort: str | None = None, max_tokens: int = 16000) -> W:
         kwargs: dict[str, Any] = {}
         if effort:
             kwargs["output_config"] = {"effort": effort}
         t0 = time.monotonic()
-        msg = await self._client.messages.parse(
+        msg = await self.client.messages.parse(
             model=model, max_tokens=max_tokens, system=system,
             messages=[{"role": "user", "content": user}], output_format=wire, **kwargs)
         if msg.stop_reason == "refusal" or msg.parsed_output is None:
@@ -97,3 +101,10 @@ class AnthropicModels:
                 tokens_in=msg.usage.input_tokens, tokens_out=msg.usage.output_tokens,
                 latency_ms=int((time.monotonic() - t0) * 1000), usd=0.0))
         return msg.parsed_output
+
+    async def record_call(self, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int,
+                          system: str = "", request_id: str | None = None) -> None:
+        if self._spend is not None:
+            await self._spend.record(SpendRow(
+                at=datetime.now(UTC), meta={"arm": arm, "stage": stage, "model": model},
+                tokens_in=usage.input_tokens, tokens_out=usage.output_tokens, latency_ms=latency_ms, usd=0.0))
