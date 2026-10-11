@@ -10,8 +10,9 @@ from pydantic import BaseModel
 from pymongo import ReturnDocument
 from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.asynchronous.database import AsyncDatabase
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
+from munchhausen.agent.terms import present_terms
 from munchhausen.domain.backtest import Backtest
 from munchhausen.domain.common import Disposer, FireDisposition, Pipeline
 from munchhausen.domain.draft import DirectionRead, Draft, DraftStatus, LayerOutcome
@@ -171,6 +172,15 @@ class AtlasLeases:
         leased = set(await self._c.distinct("idx", {"run_id": run_id, "arm": arm}))
         return sorted(set(range(below_idx)) - done - leased)
 
+    async def take_over(self, run_id: str, arm: str, idx: int, worker: str) -> bool:
+        """S2 (M2): take a lease whose TTL has passed (Atlas's TTL monitor deletes expired rows only
+        about once a minute), so a resumed worker re-issues an orphaned index without waiting for it."""
+        now = datetime.now(UTC)
+        doc = await self._c.find_one_and_update(
+            {"run_id": run_id, "arm": arm, "idx": idx, "expires_at": {"$lt": now}},
+            {"$set": {"worker": worker, "expires_at": now + timedelta(seconds=self._ttl)}})
+        return doc is not None or await self.acquire(run_id, arm, idx, worker)
+
 
 class AtlasToolAccess:
     def __init__(self, coll: AsyncCollection[Doc]) -> None:
@@ -191,7 +201,55 @@ class AtlasTerms:
         await self._c.update_one({"term": term.term}, {"$setOnInsert": to_doc(term)}, upsert=True)
 
     async def extract(self, text: str) -> frozenset[str]:
-        raise NotImplementedError("M2: $search over `terms` with synonyms; fallback agent/terms.longest_match")
+        """`$search` over `terms_search` (with the `term_synonyms` mapping) for candidate rows, then the one
+        definition of presence (`agent.terms.present_terms`) over them. When the index is absent or not READY,
+        the same definition runs over every row (the in-process fallback, SPEC § 20.3)."""
+        if not text or not text.strip():
+            return frozenset()
+        rows: list[Term] | None = None
+        if self._search_ok is None:
+            self._search_ok = await self._search_ready()
+        if self._search_ok:
+            try:
+                pipeline: Pipeline = [
+                    {"$search": {"index": "terms_search",
+                                 "text": {"query": text, "path": ["term", "aliases"], "synonyms": "term_synonyms"}}},
+                    {"$limit": self._search_limit},
+                ]
+                rows = [Term.model_validate(d) async for d in await self._c.aggregate(pipeline)]
+                self._search_ok = True
+            except OperationFailure:          # index absent, not READY, or synonyms not compiled yet
+                self._search_ok, rows = False, None
+        if rows is None:
+            rows = await self.all()
+        return present_terms(text, rows)
+
+    # --- S2 (M2) additions ------------------------------------------------------------------------------
+
+    _search_ok: bool | None = None            # None: untried; False: fall back for this process
+    _search_limit: int = 100                  # AtlasStore sets TERMS_SEARCH_LIMIT
+
+    def configure_search(self, *, limit: int) -> None:
+        self._search_limit = limit
+
+    async def _search_ready(self) -> bool:
+        try:
+            async for ix in await self._c.list_search_indexes("terms_search"):
+                return bool(ix.get("queryable")) and ix.get("status") == "READY"
+        except OperationFailure:
+            return False
+        return False
+
+    async def compile_synonyms(self) -> int:
+        """Write the `term_synonyms` mapping `terms_search` reads: one equivalence row per term with aliases.
+        Idempotent (keyed by the term); returns the number of mappings."""
+        syn = self._c.database[C.TERM_SYNONYMS.value]
+        n = 0
+        async for d in self._c.find({"aliases.0": {"$exists": True}}):
+            await syn.replace_one({"_id": d["term"]}, {"_id": d["term"], "mappingType": "equivalent",
+                                                      "synonyms": [d["term"], *d["aliases"]]}, upsert=True)
+            n += 1
+        return n
 
 
 class AtlasRuns:
