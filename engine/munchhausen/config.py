@@ -145,6 +145,24 @@ class Settings(BaseSettings):
     packs_dir: Path = ENGINE_ROOT / "packs"
     var_dir: Path = REPO_ROOT / "var"
 
+    # --- viewer and injection (S6, SPEC § 17) --------------------------------------------------------
+    viewer_host: str = "127.0.0.1"      # loopback by default; the viewer exposes no secret but drives the engine
+    viewer_port: int = 8766
+    viewer_run_id: str | None = None    # run shown first; None: RUN_ID
+    viewer_arm: str = "governed"        # the decision pane's first arm (SPEC § 17); a switcher reaches the others
+    viewer_reference_arm: str | None = None   # paired reference; None: the arm whose write_path is none
+    viewer_watch: tuple[str, ...] = ("fires", "decisions", "rounds", "tool_access", "episodes")
+    viewer_consumer: str = "viewer"     # change-stream consumer name for its resume token in `cursors`
+    viewer_fire_limit: int = 200
+    viewer_draft_limit: int = 50
+    viewer_why_depth: int = 8           # `$graphLookup` maxDepth for lineage
+    viewer_curve_window: int | None = None    # rolling window in episodes; None: ROUND_SIZE
+    viewer_floor_rows: int = 3          # result rows shown per side in the floor beat's before/after
+    viewer_sse_keepalive_s: float = 15.0
+    inject_seed: int = 101              # question instances for injection: never the stream's seed
+    inject_per_template: int = 1        # questions per chosen template (≥ BAR_MIN_OBS in total)
+    inject_scan_max: int = 5000         # questions scanned to find instances of the chosen templates
+
     # ------------------------------------------------------------------------------------------------
 
     def uri_for(self, role: Role) -> str:
