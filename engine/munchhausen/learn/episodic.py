@@ -473,8 +473,15 @@ class EpisodicPass:
             if not hs & ids:
                 continue
             l1 = h.adjudication.get("L1")
+            l4 = h.adjudication.get("L4")
             l1_hold = l1 is not None and l1.verdict is Verdict.HOLD
-            if hs < ids and (not l1_hold or len(shape.templates) > h.warrant.templates + len(h.holdout_templates)):
+            # an L4 hold awaiting a held-out template is, like an L1 hold, settled only by a new template:
+            # re-nominating on more observations of the same templates re-runs the same backtest
+            awaiting = (l4 is not None and l4.verdict is Verdict.HOLD
+                        and (l4.detail or {}).get("reason") == "awaiting_heldout_template")
+            needs_template = l1_hold or awaiting
+            if hs < ids and (not needs_template
+                             or len(shape.templates) > h.warrant.templates + len(h.holdout_templates)):
                 close.append(h)
             else:
                 return "held", []

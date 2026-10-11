@@ -134,3 +134,20 @@ def test_a_three_template_floor_folds_to_two_plus_one_and_is_not_undone(settings
     (did,) = run(p.run("r", "a", 0)).drafts
     d = drafts.rows[did]
     assert len(d.holdout_templates) == 1 and "holdout.undone" not in trace.names()
+
+
+def test_awaiting_heldout_hold_waits_on_same_templates_and_is_not_rebacktested() -> None:
+    """An `awaiting_heldout_template` hold is settled only by a new template: more observations on the
+    same two templates leave the draft held and re-run no backtest (cost guard)."""
+    life = _Lifecycle()
+    rows = [S3.obs("o1", "r:a:e1", template="t1"), S3.obs("o2", "r:a:e2", template="t1"),
+            S3.obs("o3", "r:a:e3", template="t2"), S3.obs("o4", "r:a:e4", template="t2")]
+    p, store, drafts, _, _ = S3.build(S3.GAP, Verdict.HOLD, rows, models=S3.Warranting(), holdout=1)
+    backtester = _Backtester()
+    p.adjudicator = Adjudicator(curator=LayeredCurator("governed", [L4Backtest(backtester)]), drafts=drafts,
+                                decisions=None, fires=None, lifecycle=life, view_name=lambda c, d: f"{c}__{d}")
+    (held_id,) = run(p.run("r", "a", 0)).drafts
+    n_drafts = len(drafts.rows)
+    store.rows["o6"] = S3.obs("o6", "r:a:e6", template="t2")      # more evidence, no new template
+    run(p.run("r", "a", 1))
+    assert len(drafts.rows) == n_drafts and drafts.rows[held_id].status is DraftStatus.HELD
