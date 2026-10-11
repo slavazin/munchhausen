@@ -58,7 +58,8 @@ def knob_diff(this: Mapping[str, Any], other: Mapping[str, Any]) -> list[dict[st
     return [{"knob": k, "this": this.get(k), "other": other.get(k)} for k in keys if this.get(k) != other.get(k)]
 
 
-RUN_FIELDS_DIFFED = ("git_sha", "ports", "arm_specs", "forecast_register", "prompt_hashes", "pack_hash", "length")
+RUN_FIELDS_DIFFED = ("git_sha", "ports", "arm_specs", "forecast_register", "prompt_hashes", "pack_hash",
+                     "pack_file_hash", "length")
 
 
 def run_diff(this: Mapping[str, Any], other: Mapping[str, Any]) -> list[dict[str, Any]]:

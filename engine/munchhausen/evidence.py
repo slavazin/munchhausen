@@ -77,6 +77,7 @@ def build_run_record(settings: Settings, *, selection: dict[str, dict[str, str]]
         capabilities=capabilities, started_at=now,
         git_sha=git[0], git_dirty=git[1], isolation=settings.isolation(), models=settings.model_ids(),
         prompt_hashes=prompts, pack_hash=pack_hash, world_counts=world_counts, forecast_register=register,
+        pack_file_hash=file_sha256(settings.pack_path()),
         keys_present=present, auth_mode=settings.anthropic_auth_mode(), length=length,
         arm_specs={a: spec.model_dump(mode="json") for a, spec in settings.arms().items() if a in selection}
         if selection else {a: spec.model_dump(mode="json") for a, spec in settings.arms().items()},
@@ -118,7 +119,7 @@ def resume_diff(registered: RunRecord, current: RunRecord) -> dict[str, dict[str
         a, b = registered.knobs.get(k), current.knobs.get(k)
         if a != b:
             moved[f"knobs.{k}"] = {"registered": a, "current": b}
-    for f in ("git_sha", "prompt_hashes", "ports", "pack_hash", "forecast_register", "arm_specs"):
+    for f in ("git_sha", "prompt_hashes", "ports", "pack_hash", "pack_file_hash", "forecast_register", "arm_specs"):
         a, b = getattr(registered, f), getattr(current, f)
         if a != b:
             moved[f] = {"registered": a, "current": b}
@@ -193,8 +194,8 @@ def reading_context(settings: Settings, run: RunRecord) -> R.Context:
         arms = {a: arms_all[a] for a in (run.ports or arms_all) if a in arms_all}
         notes.append("run record carries no arm_specs: arms read from the current conf/arms.yaml")
     current_pack = file_sha256(settings.pack_path(run.pack))
-    if run.pack_hash and current_pack and run.pack_hash != current_pack:
-        notes.append(f"pack file hash {current_pack[:12]} differs from the registered {run.pack_hash[:12]}: "
+    if run.pack_file_hash and current_pack and run.pack_file_hash != current_pack:
+        notes.append(f"pack file hash {current_pack[:12]} differs from the registered {run.pack_file_hash[:12]}: "
                      "template→quirk and drift schedule are read from the current pack file")
     template_quirk: dict[str, str] = {}
     drift_at: dict[str, int] = {}

@@ -41,6 +41,7 @@ class RunRecord(Value):
     resumes: list[dict[str, Any]] = Field(default_factory=list)
     lost_spend_writes: int = 0                # spend rows the call path could not write (stamped at finish)
     arm_specs: dict[str, dict[str, Any]] = Field(default_factory=dict)   # arm → ArmSpec as registered
+    pack_file_hash: str | None = None         # sha256 of the pack file (`pack_hash` may be the World's own hash)
 
 
 class RoundRecord(Value):
