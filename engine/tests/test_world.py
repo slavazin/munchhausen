@@ -74,6 +74,25 @@ def test_phrasings_name_the_concept_not_the_definition() -> None:
             assert not re.search(r"\bst\b|\brs\b|0\.995|\b[0-9]+\b", p), (q.id, p)
 
 
+def test_phrasings_imply_no_direction() -> None:
+    """A phrasing that implies over- or undercounting is wrong after a drift reverses the gap."""
+    directional = r"\b(narrower|broader|wider|more|fewer|less|extra|missing|too|includes?|excludes?|" \
+                  r"no longer|taken off|overcount|undercount|withdrawn batches that)\b"
+    for q in PACK.quirks:
+        for p in q.authority_phrasings:
+            assert not re.search(directional, p, re.I), (q.id, p)
+
+
+def test_drift_must_resolve_to_a_scheduled_knob() -> None:
+    q1 = PACK.quirk("Q1_active_customer")
+    bad_drift = q1.drift[0].model_copy(update={"at_idx": "D1_ATT"})
+    bad = PACK.model_copy(update={"quirks": tuple(
+        q.model_copy(update={"drift": (bad_drift,)}) if q.id == q1.id else q for q in PACK.quirks)})
+    problems = bad.validate_coverage()
+    assert any("D1_ATT" in p for p in problems) and any(p.startswith("D1:") for p in problems)
+    assert PACK.drift_knobs() == {"D1": "d1_at"} and hasattr(S, "d1_at")
+
+
 def test_pack_hash_is_stable() -> None:
     assert PACK.content_hash() == load_pack(S.pack_path()).content_hash()
     assert len(PACK.content_hash()) == 64
@@ -120,11 +139,35 @@ def test_one_quirk_per_question_and_dana_on_controls_only() -> None:
 
 
 def test_v_set_is_sealed_from_the_stream() -> None:
+    """Sealed by what the proposer sees (the text) plus a preference persona: no V text recurs in the
+    stream except as a different (non-Dana) persona's identical question, which is excluded too."""
     v = BANK.v_set(S.v_seed, S.v_size)
     assert len(v) == S.v_size and all(q.id.startswith("v") for q in v)
-    key = lambda q: (q.template, q.persona, tuple(sorted(BANK.hidden(q.id).params.items())))  # noqa: E731
-    v_keys = {key(q) for q in v}
-    assert not v_keys & {key(BANK.question_at(S.stream_seed, i)) for i in range(3000)}
+    pq = PACK.persona_quirks()
+    key = lambda q: (q.text, q.persona if q.persona in pq else None)  # noqa: E731
+    assert len({key(q) for q in v}) == len(v)                                    # no duplicates in V
+    stream = [BANK.question_at(S.stream_seed, i) for i in range(3000)]
+    assert not {key(q) for q in v} & {key(q) for q in stream}
+    assert not {q.text for q in v if q.persona not in pq} & {q.text for q in stream if q.persona not in pq}
+
+
+def test_v_set_is_stratified_by_quirk() -> None:
+    v = BANK.v_set(S.v_seed, S.v_size)
+    by = Counter((BANK.hidden(q.id).quirks or ("control",))[0] for q in v)
+    weights = {q.id: q.weight for q in PACK.quirks if q.templates and q.kind != "poison"}
+    for quirk, w in weights.items():
+        expected = S.quirk_share * S.v_size * w / sum(weights.values())
+        assert abs(by[quirk] - expected) < 1, (quirk, by[quirk], expected)
+    assert abs(by["control"] - (1 - S.quirk_share) * S.v_size) < 1
+    fresh = bank_from_pack(PACK, S.quirk_share)
+    assert fresh.hidden(v[7].id) == BANK.hidden(v[7].id)                         # V ids regenerate
+
+
+def test_stream_quirk_mix_is_not_moved_by_sealing() -> None:
+    unsealed = bank_from_pack(PACK, S.quirk_share)
+    a = Counter(bool(BANK.hidden(BANK.question_at(S.stream_seed, i).id).quirks) for i in range(1000))
+    b = Counter(bool(unsealed.hidden(unsealed.question_at(S.stream_seed, i).id).quirks) for i in range(1000))
+    assert a == b
 
 
 def test_instances_by_template() -> None:
@@ -229,7 +272,13 @@ async def test_pack_world_builds_and_judges() -> None:
     assert len(w.v_set()) == S.v_size
     inv = w.inventory()
     assert inv["pack_hash"] == w.pack_hash and inv["drift_at"] == {"D1": S.d1_at}
-    assert "definition" not in str(inv) and "0.995" not in str(inv)
+    assert {q["id"]: q["definition"] for q in inv["quirks"]}["Q1_active_customer"]
+    assert inv["stream_identity"] == {"v_seed": S.v_seed, "v_size": S.v_size}
+    assert len(inv["poison_variants"]) == len(PACK.poison_bank)
+    q5 = w.bank.pose("revenue_year", "priya", {"year": 2010})
+    ids = [w.poisoned(q5, i) for i in range(200)]
+    assert ids == [w.poisoned(q5, i) for i in range(200)] and "N1#0:Q5_revenue" in ids
+    assert all(w.poisoned(w.bank.pose("sell_trades_year", "priya", {"year": 2010}), i) is None for i in range(200))
     assert w.instances("revenue_symbol", 0, 2)[0].template == "revenue_symbol"
 
 

@@ -53,7 +53,9 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = Field(
         default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key", "anthropic_munch_key"))
     # An organization-level key not scoped to a workspace must send `anthropic-workspace-id` on every request.
-    anthropic_workspace_id: str | None = None
+    anthropic_workspace_id: str | None = Field(
+        default=None, validation_alias=AliasChoices(
+            "ANTHROPIC_WORKSPACE_ID", "anthropic_workspace_id", "anthropic_workspace_key"))
     anthropic_auth_token: SecretStr | None = Field(
         default=None, validation_alias=AliasChoices("ANTHROPIC_AUTH_TOKEN", "anthropic_auth_token", "claude_oauth_key"))
     voyage_api_key: SecretStr | None = Field(
@@ -166,8 +168,14 @@ class Settings(BaseSettings):
     nominator_tool_max_rows: int = 50       # rows one world-tool call returns to the nominator ($limit appended)
     nominator_tool_max_time_ms: int = 5000  # maxTimeMS per world-tool aggregate
     nominator_tool_result_chars: int = 6000 # characters of one tool result shown to the nominator
-    nominator_residual_window: int = 10     # recent consultations read per neighbour for its residuals
+    nominator_residual_window: int = 4     # recent consultations read per neighbour for its residuals
     nominator_min_options: int = 2          # options rows: >= 1 prior (rejected) + the chosen definition
+    # Direction read window when no contested neighbour dates a drift: the last N episodes the shape's
+    # presentation matches (and the same idx window outside it). 40 = 4 x BAR_MIN_MATCHED: a miss-rate gap
+    # of BAR_MIN_GAP reads above the ~0.08 standard error of a rate at n=40, and the window spans a few
+    # rounds of matched episodes, so a post-drift gap is not diluted by every pre-drift episode.
+    direction_window: int = 40
+    error_prompt_chars: int = 300           # characters of a driver error shown to a party (code + errmsg)
 
     # --- second-order loop ---------------------------------------------------------------------------
     label_horizon: int = 150

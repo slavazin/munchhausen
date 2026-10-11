@@ -14,10 +14,11 @@ import numpy as np
 import pytest
 
 from munchhausen.config import Settings
-from munchhausen.domain.common import DecisionKind, EvidenceState, LifecycleStatus, Signature, emb_key
+from munchhausen.domain.common import DecisionKind, EvidenceState, FireRole, LifecycleStatus, Signature, emb_key
 from munchhausen.domain.decision import Decision, EntryContract, Lifecycle, Option, Warrant
 from munchhausen.domain.draft import DirectionRead, Draft, DraftStatus, LayerOutcome, Route, Verdict
-from munchhausen.domain.episode import Episode
+from munchhausen.domain.episode import Episode, Residual
+from munchhausen.domain.fire import Fire, FireCause
 from munchhausen.domain.latches import Guard, HookLatch, KeySet, NotThisRow, RevisitLatch, WiringLatch
 from munchhausen.domain.observation import (
     Observation,
@@ -32,7 +33,7 @@ from munchhausen.impl.grouper import AgglomerativeGrouper, SignatureBucketGroupe
 from munchhausen.impl.parties import nominator as nominator_party
 from munchhausen.impl.parties import observer as observer_party
 from munchhausen.impl.representation import NoRepresentation
-from munchhausen.learn.episodic import Bar, EpisodicPass, coherence_guard, shape_of
+from munchhausen.learn.episodic import Bar, EpisodicPass, coherence_guard, presentation_filter, shape_of
 from munchhausen.learn.nominate import Nominator
 from munchhausen.learn.observe import Observer, masked
 from munchhausen.lint_language import lint_draft_language, lint_noticed, parse_escape, tells
@@ -133,19 +134,34 @@ class Observations:
 
 
 class Episodes:
-    def __init__(self, read: DirectionRead) -> None:
-        self.read, self.filters, self.got = read, [], []
+    def __init__(self, read: DirectionRead, consultations: Sequence[Episode] = ()) -> None:
+        self.read, self.filters, self.got, self.windows = read, [], [], []
+        self.consultations = list(consultations)
 
     async def get(self, eid: str) -> Episode | None:
         self.got.append(eid)
-        return episode(eid)
+        return episode(eid, int(eid.rsplit(":e", 1)[-1]) if ":e" in eid else 1)
 
     async def direction_read(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int):  # noqa: ANN201
         self.filters.append((inside, before_idx))
         return self.read
 
+    async def direction_read_window(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int,  # noqa: ANN201
+                                    after_idx: int | None = None, last_n: int | None = None):
+        self.filters.append((inside, before_idx))
+        self.windows.append({"after_idx": after_idx, "last_n": last_n})
+        return self.read
+
     async def consultations_of(self, run_id: str, arm: str, decision_id: str, last_n: int) -> list[Episode]:
-        return []
+        return self.consultations
+
+
+class Fires:
+    def __init__(self, rows: Sequence[Fire] = ()) -> None:
+        self.rows = list(rows)
+
+    async def open_for(self, decision_id: str) -> list[Fire]:
+        return [f for f in self.rows if f.decision_id == decision_id]
 
 
 class Drafts:
@@ -158,7 +174,12 @@ class Drafts:
     async def get(self, did: str) -> Draft | None:
         return self.rows.get(did)
 
-    async def record(self, did: str, outcome: LayerOutcome) -> None: ...
+    async def record(self, did: str, outcome: LayerOutcome) -> None:
+        d = self.rows[did]
+        self.rows[did] = d.model_copy(update={"adjudication": {**d.adjudication, outcome.layer: outcome}})
+
+    async def set_status(self, did: str, status: DraftStatus) -> None:
+        self.rows[did] = self.rows[did].model_copy(update={"status": status})
 
     async def held(self, run_id: str, arm: str) -> list[Draft]:
         return [d for d in self.rows.values() if d.status is DraftStatus.HELD]
@@ -299,7 +320,7 @@ def test_embedding_and_mask() -> None:
 
 def test_observer_prompt_never_shows_the_retry_pipeline() -> None:
     ep = episode("r:a:e7").model_copy(update={"retry_pipeline": [{"$match": {"secret": 1}}]})
-    assert "secret" not in observer_party.render(ep)
+    assert "secret" not in observer_party.render(ep, S)
     wire = observer_party.NoteWire.model_validate(
         {"class": "reducible", "noticed": "n.", "terms": ["invented"], "collection": None, "fields": [],
          "signature_guess": None, "re_check_terms": []})
@@ -329,7 +350,8 @@ def test_guard_keeps_shared_terms_and_partitions_otherwise() -> None:
     a = [obs("o1", "e1", terms=("active customers", "accounts")), obs("o2", "e2", terms=("active customers",))]
     assert coherence_guard(shape_of(a), a)[0].terms == frozenset({"active customers"})
     b = [obs("o1", "e1", terms=("revenue",), phrasing="x"), obs("o2", "e2", terms=("revenue",), phrasing="y"),
-         obs("o3", "e3", terms=("fiscal quarter",), phrasing="z"), obs("o4", "e4", terms=(), phrasing="w")]
+         obs("o3", "e3", terms=("fiscal quarter",), phrasing="z", delta=-3.0, persona="dana"),
+         obs("o4", "e4", terms=(), phrasing="w")]
     split = coherence_guard(shape_of(b), b)
     assert sorted(s.observation_ids for s in split) == [("o1", "o2"), ("o3",)]
     same_phrase = [obs("o1", "e1", terms=("a",), phrasing="p"), obs("o2", "e2", terms=("b",), phrasing="p")]
@@ -344,15 +366,18 @@ NO_GAP = DirectionRead(misses_in=4, n_in=20, misses_out=20, n_out=100)
 
 
 def build(read: DirectionRead, verdict: Verdict, rows: Sequence[Observation], *, models: Models | None = None,
-          admitted: Sequence[Decision] = ()) -> tuple[EpisodicPass, Observations, Drafts, Trace, Models]:
+          admitted: Sequence[Decision] = (), fires: Fires | None = None, consultations: Sequence[Episode] = (),
+          window: int | None = None, adjudicator: Any = None,
+          ) -> tuple[EpisodicPass, Observations, Drafts, Trace, Models]:
     store, drafts, trace, models = Observations(rows), Drafts(), Trace(), models or Models()
-    episodes = Episodes(read)
+    episodes = Episodes(read, consultations)
     nominator = Nominator(models=models, world=None, episodes=episodes, terms=Terms(),  # type: ignore[arg-type]
                           decisions=Decisions(admitted), representation=NoRepresentation(), similarity=None,  # type: ignore[arg-type]
                           neighbour_k=5, residual_window=10, trace=trace)
     p = EpisodicPass(observations=store, episodes=episodes, drafts=drafts, grouper=SignatureBucketGrouper(),
-                     bar=Bar.from_settings(S), nominator=nominator, adjudicator=Adjudicator(verdict),
-                     round_size=30, trace=trace)
+                     bar=Bar.from_settings(S), nominator=nominator,
+                     adjudicator=adjudicator or Adjudicator(verdict),
+                     round_size=30, trace=trace, fires=fires, direction_window=window)
     return p, store, drafts, trace, models
 
 
@@ -522,7 +547,7 @@ def test_party_records_rejected_prior_and_computes_figures_reproduced() -> None:
     assert e.retire_latch is not None and new_terms == ()
     assert len(llm.calls) == 4 and all(c["stage"] == "nominate" for c in llm.calls)
     first_reply = client.requests[1]["messages"][2]["content"][0]
-    assert first_reply["is_error"] and "no successful aggregate run" in first_reply["content"]
+    assert first_reply["is_error"] and "no aggregate run labelled" in first_reply["content"]
     assert client.requests[0]["output_config"] == {"effort": S.nominator_effort}
     assert client.requests[0]["model"] == S.nominator_model
 
@@ -548,3 +573,122 @@ def test_party_refuses_a_supersede_of_a_clear_neighbour_and_a_leaked_figure() ->
     assert any("contested" in p for p in problems)
     ok = nominator_party.DraftWire.model_validate({**SUBMIT, "payload": "The count is 90 open customers."})
     assert any("source figure" in p for p in nominator_party.submission_problems(ok, session))
+
+
+# --- review fixes ----------------------------------------------------------------------------------
+
+
+def test_neighbour_residuals_show_no_figures_and_seen_episodes_are_recorded() -> None:
+    res = Residual(id="x", decision_id="D-hot", answer=123.0, figure=456.0, ratio=0.27, delta=-333.0,
+                   signature_match=True, attributable=True)
+    assert nominator_party.residual_view(res) == {"signature_match": True, "attributable": True, "direction": "-"}
+    consulted = [episode("r:a:e40").model_copy(update={"residuals": (res,)})]
+    hot = decision("D-hot", EvidenceState.CONTESTED)
+    p, _, drafts, _, models = build(GAP, Verdict.ADMIT, ROWS, admitted=[hot], consultations=consulted)
+    (did,) = run(p.run("r", "a", 0)).drafts
+    assert drafts.rows[did].nominator_seen_episode_ids == ("r:a:e1", "r:a:e2", "r:a:e40")
+    rendered = nominator_party.render(models.inputs[0], [])
+    assert "456" not in rendered and "123" not in rendered
+
+
+def test_direction_read_windows_from_the_contested_neighbours_fire_and_drops_pre_drift_members() -> None:
+    hot = decision("D-hot", EvidenceState.CONTESTED)
+    fire = Fire(_id="F", run_id="r", arm="a", decision_id="D-hot", latch="T-D-hot-1", role=FireRole.DISPOSITIVE,
+                cause=FireCause.RESIDUALS, episode_ids=("r:a:e305",), at_idx=320)
+    rows = [obs("o1", "r:a:e100"), obs("o2", "r:a:e310", template="t2"), obs("o3", "r:a:e330", template="t3")]
+    p, store, drafts, trace, models = build(GAP, Verdict.ADMIT, rows, admitted=[hot], fires=Fires([fire]),
+                                            window=S.direction_window)
+    rep = run(p.run("r", "a", 11))
+    assert p.episodes.windows == [{"after_idx": 305, "last_n": None}]
+    assert {o.id for o in models.inputs[0].sources} == {"o2", "o3"}
+    assert store.rows["o1"].disposition is ObservationDisposition.OPEN and "shape.windowed" in trace.names()
+    assert len(rep.drafts) == 1
+    p, *_ = build(GAP, Verdict.ADMIT, ROWS, window=S.direction_window)
+    run(p.run("r", "a", 0))
+    assert p.episodes.windows == [{"after_idx": None, "last_n": S.direction_window}]
+
+
+def test_adjudicator_exception_reopens_evidence_and_rerun_resumes_the_pending_draft() -> None:
+    class Flaky:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def adjudicate(self, draft, ctx):  # noqa: ANN001, ANN201
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("backtest down")
+            return [LayerOutcome(layer="L4", role=None, verdict=Verdict.ADMIT)]
+
+    p, store, drafts, trace, models = build(GAP, Verdict.ADMIT, ROWS, adjudicator=Flaky())
+    rep = run(p.run("r", "a", 0))
+    assert rep.failed and "adjudication.failed" in trace.names()
+    assert store.rows["o1"].disposition is ObservationDisposition.OPEN
+    rep = run(p.run("r", "a", 0))
+    assert rep.resumed and not rep.drafts and len(models.inputs) == 1
+    assert store.rows["o1"].disposition is ObservationDisposition.SPENT
+
+
+def test_guard_keeps_a_persona_shape_and_a_floor_shape_without_shared_terms() -> None:
+    dana = [obs("o1", "e1", template="c1", terms=("revenue",), phrasing="x", persona="dana", delta=-0.4,
+                sig=Signature.ROUNDING),
+            obs("o2", "e2", template="c2", terms=("trades",), phrasing="y", persona="dana", delta=0.3,
+                sig=Signature.ROUNDING)]
+    assert len(coherence_guard(shape_of(dana), dana)) == 1
+    assert presentation_filter(shape_of(dana)) == {"template": {"$in": ["c1", "c2"]}, "persona": "dana"}
+    q3 = [obs(f"o{i}", f"e{i}", template=f"t{i}", terms=(t,), phrasing=f"p{i}", persona=p)
+          for i, (t, p) in enumerate([("accounts", "omar"), ("account limit", "lee"), ("products", "kim")])]
+    (shape,) = coherence_guard(shape_of(q3), q3)
+    assert len(shape.templates) == 3
+
+
+def test_held_partial_overlap_waits_and_l1_hold_needs_a_new_template() -> None:
+    p, store, drafts, _, models = build(GAP, Verdict.HOLD, ROWS)
+    (did,) = run(p.run("r", "a", 0)).drafts
+    hold = LayerOutcome(layer="L1", role=None, verdict=Verdict.HOLD)
+    drafts.rows[did] = drafts.rows[did].model_copy(update={"status": DraftStatus.HELD,
+                                                           "adjudication": {"L1": hold}})
+    store.rows["o3"] = obs("o3", "r:a:e3", template="t2")      # more evidence, no new template
+    rep = run(p.run("r", "a", 1))
+    assert not rep.drafts and "held" in [r for _, r in rep.refused]
+    store.rows["o4"] = obs("o4", "r:a:e4", template="t3")      # a new template
+    rep = run(p.run("r", "a", 2))
+    assert len(rep.drafts) == 1 and drafts.rows[did].status is DraftStatus.REFUSED
+    assert drafts.rows[did].adjudication["renominated"].detail["renominated_as"] == rep.drafts[0]
+    assert len(models.inputs) == 2
+
+
+def test_party_refuses_literal_figures_and_counts_only_runs_against_source_episodes() -> None:
+    inp = party_input(World())
+    session = nominator_party.Session.open(S, inp)
+    text, err = run(session.aggregate({"collection": "customers", "pipeline_json": '[{"$project": {"n": 90}}]',
+                                       "answer_path": "0.n", "option": "open", "episode_id": "r:a:e1"}))
+    assert err and "literal" in text
+    run(session.aggregate({"collection": "customers", "pipeline_json": "[]", "answer_path": "0.n",
+                           "option": "prior", "episode_id": ""}))
+    assert not session.ran("prior")
+    assert [r["option"] for r in inp.run_log] == ["open", "prior"] and inp.run_log[1]["pipeline"] == []
+    assert nominator_party.logical_collections(["customers", "customers__D-1", "system.views"]) == ["customers"]
+
+
+def test_nominator_traces_every_world_tool_run() -> None:
+    class Logging(Models):
+        async def nominate(self, inp):  # noqa: ANN001, ANN201
+            inp.run_log.append({"option": "prior", "episode_id": "r:a:e1", "pipeline": [], "answer": 100,
+                                "reproduced": False, "error": None, "collection": "customers"})
+            return entry(), ()
+
+    p, _, _, trace, _ = build(GAP, Verdict.ADMIT, ROWS, models=Logging())
+    run(p.run("r", "a", 0))
+    assert dict(trace.events)["nominator.run"]["option"] == "prior"
+
+
+def test_noise_provenance_and_empty_observer() -> None:
+    trace = Trace()
+    o = Observer(Models([note("The answer path reads a missing key.", ObservationClass.IRREDUCIBLE)]),
+                 NoRepresentation(), Observations(), trace=trace)
+    assert run(o.observe(episode("r:a:e8"), 0))[0].disposed_by == "observer"
+    assert run(o.observe(episode("r:a:e9", error="X: y"), 0))[0].disposed_by == "noise_filter"
+    o = Observer(Models([]), NoRepresentation(), Observations(), trace=trace)
+    assert run(o.observe(episode("r:a:e10"), 0)) == [] and "observation.none" in trace.names()
+    long = "OperationFailure: bad, full error: {'ok': 0, 'errmsg': 'bad'}"
+    assert observer_party.short_error(long, S.error_prompt_chars) == "OperationFailure: bad"

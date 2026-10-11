@@ -26,7 +26,8 @@ from pydantic import BaseModel, ValidationError
 from munchhausen.agent.execute import ExecutionError, read_path
 from munchhausen.config import Settings
 from munchhausen.domain.common import Answer, DecisionKind, EvidenceState, Signature
-from munchhausen.domain.decision import EntryContract, Option, Warrant
+from munchhausen.domain.decision import EntryContract, Option, Warrant, leaked_figures
+from munchhausen.domain.episode import Residual
 from munchhausen.domain.latches import (
     FloorLatch,
     Guard,
@@ -44,6 +45,7 @@ from munchhausen.lint_language import lint_draft_language
 from munchhausen.ports.models import NominatorInput
 
 PENDING = "T-pending"
+VIEW_SEP = "__"          # floor views are named <logical collection>__<decision id> (store/names.py)
 REVISIT_K, RETIRE_K = 1, 2
 STAGE = "nominate"
 
@@ -191,6 +193,13 @@ class Run:
     answer: Answer
     reproduced: bool
     error: str | None = None
+    collection: str = ""
+    pipeline: tuple[Any, ...] = ()
+
+    def row(self) -> dict[str, Any]:
+        return {"option": self.option, "episode_id": self.episode_id, "collection": self.collection,
+                "pipeline": list(self.pipeline), "answer": self.answer, "reproduced": self.reproduced,
+                "error": self.error}
 
 
 @dataclass
@@ -210,6 +219,13 @@ class Session:
                 figures[o.episode_id] = o.figure
         return cls(settings, inp, figures)
 
+    def source_figures(self) -> list[float]:
+        return [x for o in self.inp.sources for x in (o.answer, o.figure) if isinstance(x, (int, float))]
+
+    def log(self, run: Run) -> None:
+        self.runs.append(run)
+        self.inp.run_log.append(run.row())
+
     async def aggregate(self, raw: dict[str, Any]) -> tuple[str, bool]:
         try:
             call = AggregateWire.model_validate(raw)
@@ -218,13 +234,19 @@ class Session:
                 raise ValueError("pipeline_json must be a JSON array of stages")
         except (ValidationError, ValueError) as e:
             return f"invalid call: {e}", True
-        pipeline = [*pipeline, {"$limit": self.settings.nominator_tool_max_rows}]
+        leaked = leaked_figures(call.pipeline_json, self.source_figures())
+        if leaked:   # a pipeline that writes the figure in reproduces nothing
+            self.log(Run(call.option, call.episode_id, None, False, f"source figure as a literal: {leaked}",
+                         call.collection, tuple(pipeline)))
+            return f"refused: the pipeline contains a source figure as a literal: {leaked}", True
+        capped = [*pipeline, {"$limit": self.settings.nominator_tool_max_rows}]
         try:
-            rows = await self.inp.world.aggregate(call.collection, pipeline,
+            rows = await self.inp.world.aggregate(call.collection, capped,
                                                   max_time_ms=self.settings.nominator_tool_max_time_ms)
         except Exception as e:   # driver and guard refusals are data for the model, not a crash
-            self.runs.append(Run(call.option, call.episode_id, None, False, f"{type(e).__name__}: {e}"))
-            return f"{type(e).__name__}: {e}", True
+            err = short_error(f"{type(e).__name__}: {e}", self.settings.error_prompt_chars)
+            self.log(Run(call.option, call.episode_id, None, False, err, call.collection, tuple(pipeline)))
+            return err, True
         answer: Answer = None
         read_error = None
         if call.answer_path:
@@ -234,7 +256,8 @@ class Session:
                 read_error = str(e)
         figure = self.figures.get(call.episode_id)
         reproduced = bool(call.episode_id) and matches(answer, figure, rel_tol=self.settings.score_rel_tol)
-        self.runs.append(Run(call.option, call.episode_id, answer, reproduced, read_error))
+        self.log(Run(call.option, call.episode_id, answer, reproduced, read_error, call.collection,
+                     tuple(pipeline)))
         body = {"rows": rows, "answer": answer, "answer_error": read_error,
                 "episode_id": call.episode_id or None,
                 "figure": figure if call.episode_id else None, "reproduced": reproduced}
@@ -246,7 +269,9 @@ class Session:
         return tuple(sorted({r.episode_id for r in self.runs if r.option == label and r.reproduced}))
 
     def ran(self, label: str) -> bool:
-        return any(r.option == label and r.error is None for r in self.runs)
+        """An option counts as run only by a run against a source episode that read an answer."""
+        return any(r.option == label and r.error is None and r.episode_id in self.figures
+                   and r.answer is not None for r in self.runs)
 
 
 # --- the entry -------------------------------------------------------------------------------------
@@ -299,7 +324,8 @@ def submission_problems(w: DraftWire, s: Session) -> list[str]:
         out.append("exactly one option must be chosen")
     for o in w.options:
         if not s.ran(o.label):
-            out.append(f"option {o.label!r} has no successful aggregate run labelled with it; run it first")
+            out.append(f"option {o.label!r} has no aggregate run labelled with it against a source episode_id "
+                       "that read an answer; run it first")
     if w.supersedes is not None and w.supersedes not in contested_neighbours(s.inp):
         out.append(f"supersedes {w.supersedes!r} is not a contested neighbour; set it to null")
     if w.floor is not None:
@@ -311,11 +337,28 @@ def submission_problems(w: DraftWire, s: Session) -> list[str]:
     if out:
         return out
     entry = build_entry(w, s)
-    figures = [x for o in s.inp.sources for x in (o.answer, o.figure) if isinstance(x, (int, float))]
-    return entry.l0_violations(figures) + lint_draft_language(entry, s.inp.vocabulary, w.new_terms)
+    return entry.l0_violations(s.source_figures()) + lint_draft_language(entry, s.inp.vocabulary, w.new_terms)
 
 
 # --- prompt ----------------------------------------------------------------------------------------
+
+
+def residual_view(r: Residual) -> dict[str, Any]:
+    """Where a neighbour loses, without its figures: answer, figure, ratio and delta of a neighbour's
+    consultations would hand the nominator confirmed figures from the backtest population."""
+    sign = None if r.delta is None else ("+" if r.delta > 0 else "-" if r.delta < 0 else "0")
+    return {"signature_match": r.signature_match, "attributable": r.attributable, "direction": sign}
+
+
+def logical_collections(names: list[str]) -> list[str]:
+    """World collections as a question names them: floor views (`<coll>__<decision>`) and system
+    collections are not logical collections."""
+    return sorted(n for n in names if VIEW_SEP not in n and not n.startswith("system."))
+
+
+def short_error(error: str, limit: int) -> str:
+    """The driver's code and errmsg only: pymongo appends the full error document after ", full error:"."""
+    return error.split(", full error:")[0][:limit]
 
 
 def render(inp: NominatorInput, collections: list[str]) -> str:
@@ -340,8 +383,7 @@ def render(inp: NominatorInput, collections: list[str]) -> str:
             {"id": d.id, "title": d.title, "kind": d.kind.value, "payload": d.payload,
              "fires_when": d.hook.fires_when.model_dump(mode="json"),
              "evidence_state": d.evidence_state.value, "contested": d.id in contested,
-             "recent_residuals": [r.model_dump(mode="json", exclude={"id"})
-                                  for r in inp.neighbour_residuals.get(d.id, ())]}
+             "recent_residuals": [residual_view(r) for r in inp.neighbour_residuals.get(d.id, ())]}
             for d in inp.neighbours],
     }
     return ("Nominate the decision for this shape. Run the prior convention first.\n\n"
@@ -355,7 +397,7 @@ async def run(llm: LLM, settings: Settings, inp: NominatorInput) -> tuple[EntryC
     session = Session.open(settings, inp)
     arm = inp.sources[0].arm if inp.sources else ""
     try:
-        collections = await inp.world.collection_names()
+        collections = logical_collections(await inp.world.collection_names())
     except Exception:  # noqa: BLE001 - a listing failure only removes a hint from the prompt
         collections = []
     messages: list[dict[str, Any]] = [{"role": "user", "content": render(inp, collections)}]
@@ -364,7 +406,8 @@ async def run(llm: LLM, settings: Settings, inp: NominatorInput) -> tuple[EntryC
     for turn in range(turns):
         t0 = time.monotonic()
         resp = await llm.client.messages.create(
-            model=settings.nominator_model, max_tokens=settings.nominator_max_tokens, system=SYSTEM,
+            model=settings.nominator_model, max_tokens=settings.nominator_max_tokens,
+            system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
             tools=TOOLS, messages=messages, output_config={"effort": settings.nominator_effort})
         await llm.record_call(stage=STAGE, arm=arm, model=settings.nominator_model, usage=resp.usage,
                               latency_ms=int((time.monotonic() - t0) * 1000), system=SYSTEM,

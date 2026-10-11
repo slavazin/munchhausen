@@ -50,6 +50,9 @@ class NominatorInput:
     world: DocumentReader                         # read-only world query tool (or the MCP server, § 20.2)
     neighbours: Sequence[Decision] = field(default_factory=tuple)
     neighbour_residuals: Mapping[str, Sequence[Residual]] = field(default_factory=dict)   # decision id → recent
+    # Out-channel: the party appends one row per world-tool run (option, episode_id, pipeline, answer,
+    # reproduced, error); the application traces them (`nominator.run`). Never read by the party.
+    run_log: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         outside = {e.id for e in self.episodes} - set(self.shape.episode_ids)

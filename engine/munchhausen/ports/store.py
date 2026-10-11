@@ -14,7 +14,7 @@ from munchhausen.domain.admission import Admission
 from munchhausen.domain.backtest import Backtest
 from munchhausen.domain.common import Disposer, FireDisposition, Pipeline
 from munchhausen.domain.decision import Amendment, Decision
-from munchhausen.domain.draft import DirectionRead, Draft, LayerOutcome
+from munchhausen.domain.draft import DirectionRead, Draft, DraftStatus, LayerOutcome
 from munchhausen.domain.episode import Episode
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
@@ -82,6 +82,12 @@ class EpisodeRepository(Protocol):
         `$facet` branch over episodes scored correct, one over first-attempt misses, ≤ n in total, a short
         stratum topped up from the other. `seed` set: each branch is ordered by a seeded hash of `_id`, so the
         same draft over the same store draws the same sample; `None`: `$sample`."""
+
+    async def direction_read_window(self, run_id: str, arm: str, inside: dict[str, Any], *, before_idx: int,
+                                    after_idx: int | None = None, last_n: int | None = None) -> DirectionRead:
+        """The direction read over a window, the same window on both sides: stream episodes with
+        `after_idx <= idx < before_idx`; with `last_n`, the window starts at the `last_n`-th most recent
+        episode the presentation matches. Added by S3 (a cumulative read dilutes a post-drift gap)."""
         ...
 
 
@@ -161,6 +167,10 @@ class DraftRepository(Protocol):
     async def record(self, draft_id: str, outcome: LayerOutcome) -> None: ...
 
     async def held(self, run_id: str, arm: str) -> list[Draft]: ...
+
+    async def set_status(self, draft_id: str, status: DraftStatus) -> None:
+        """Narrow update of one draft's status (S3: closing a re-nominated held draft)."""
+        ...
 
 
 @runtime_checkable
