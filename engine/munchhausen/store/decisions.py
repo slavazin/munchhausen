@@ -100,6 +100,45 @@ class AtlasDecisions:
         roles = [(FireRole(f["role"]), FireDisposition(f["disposition"])) async for f in cur]
         await self._c.update_one({"_id": decision_id}, {"$set": {"evidence_state": evidence_state(roles).value}})
 
+    # --- `why` (read-only) -------------------------------------------------------------------------
+
+    async def trail(self, decision_id: str) -> dict[str, Any] | None:
+        """One aggregation: `$graphLookup` over `latches.edges` (predecessors), a reverse `$lookup` for
+        successors, and `$lookup`s to the warrant's observations and episodes, the backtest and the fires."""
+        no_emb = [{"$project": {"emb": 0}}]
+        pipeline = [
+            {"$match": {"_id": decision_id}},
+            # `$latches.edges` over an array of latch subdocuments is an array of arrays; flatten it first
+            {"$graphLookup": {"from": C.DECISIONS.value,
+                              "startWith": {"$reduce": {"input": "$latches.edges", "initialValue": [],
+                                                        "in": {"$concatArrays": ["$$value", "$$this"]}}},
+                              "connectFromField": "latches.edges", "connectToField": "_id",
+                              "as": "lineage", "depthField": "depth"}},
+            {"$lookup": {"from": C.DECISIONS.value, "localField": "_id", "foreignField": "latches.edges",
+                         "pipeline": no_emb, "as": "successors"}},
+            {"$lookup": {"from": C.OBSERVATIONS.value, "localField": "warrant.source_observation_ids",
+                         "foreignField": "_id", "pipeline": no_emb, "as": "observations"}},
+            {"$lookup": {"from": C.EPISODES.value, "localField": "warrant.source_episode_ids",
+                         "foreignField": "_id", "as": "episodes",
+                         "pipeline": [{"$project": {"idx": 1, "text": 1, "template": 1, "persona": 1, "answer": 1,
+                                                    "figure": 1, "phrasing": 1, "confirmed_figure": 1}}]}},
+            {"$lookup": {"from": C.BACKTESTS.value, "localField": "warrant.backtest_id", "foreignField": "_id",
+                         "as": "backtest"}},
+            {"$lookup": {"from": C.FIRES.value, "localField": "_id", "foreignField": "decision_id", "as": "fires"}},
+            {"$lookup": {"from": C.TOOL_ACCESS.value, "localField": "_id", "foreignField": "decision_id",
+                         "as": "tool_access"}},
+            {"$project": {"emb": 0, "lineage.emb": 0}},
+        ]
+        docs = await (await self._c.aggregate(pipeline)).to_list()
+        return docs[0] if docs else None
+
+    async def ids_with_term(self, run_id: str, term: str, arm: str | None = None) -> list[str]:
+        query: dict[str, Any] = {"run_id": run_id, "latches.fires_when.terms": term}
+        if arm is not None:
+            query["arm"] = arm
+        cur = self._c.find(query, {"_id": 1, "lifecycle.at_idx": 1}).sort("lifecycle.at_idx", 1)
+        return [d["_id"] async for d in cur]
+
     # --- internals ---------------------------------------------------------------------------------
 
     async def _admit_txn(self, s: AsyncClientSession, plan: Admission) -> None:

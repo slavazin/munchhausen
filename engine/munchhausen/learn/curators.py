@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from munchhausen.domain.common import LayerRole
-from munchhausen.domain.draft import Draft, LayerOutcome, Verdict
+from munchhausen.domain.draft import Draft, LayerOutcome, Route, Verdict
 from munchhausen.learn.layers import DirectAdmit
 from munchhausen.ports.curation import CurationContext, Layer
 
@@ -22,17 +22,32 @@ class LayeredCurator:
         return any(layer.role is LayerRole.DISPOSITIVE for layer in self.layers)
 
     async def curate(self, draft: Draft, ctx: CurationContext) -> list[LayerOutcome]:
+        """A routing layer's route is applied to the draft the later layers see (`routed`), so the
+        backtest reads a supersede's population and context, not the nominator's original route."""
         out: list[LayerOutcome] = []
         for layer in self.layers:
             outcome = await layer.check(draft, ctx)
             if outcome.verdict is Verdict.ADMIT and layer.role is not LayerRole.DISPOSITIVE and self.governed:
                 raise RuntimeError(f"{layer.name}: only a dispositive layer may admit under a governed curator")
             if outcome.verdict is Verdict.ADMIT and self.owner_required:
-                outcome = outcome.model_copy(update={"verdict": Verdict.HOLD, "detail": {"awaiting": "owner"}})
+                outcome = outcome.model_copy(update={"verdict": Verdict.HOLD,
+                                                     "detail": {**outcome.detail, "awaiting": "owner"}})
             out.append(outcome)
+            draft = routed(draft, [outcome])
             if outcome.verdict is not Verdict.PASS:
                 break
         return out
+
+
+def routed(draft: Draft, outcomes: Sequence[LayerOutcome]) -> Draft:
+    """The draft with the last routing layer's route applied (`supersedes` set for a supersede)."""
+    for o in reversed(outcomes):
+        if o.role is LayerRole.ROUTING and o.route is not None:
+            supersedes = o.neighbour_id if o.route is Route.SUPERSEDE else None
+            if (draft.route, draft.supersedes) == (o.route, supersedes):
+                return draft
+            return draft.model_copy(update={"route": o.route, "supersedes": supersedes})
+    return draft
 
 
 def governed(l0: Layer, l1: Layer, l2: Layer, l3: Layer, l4: Layer) -> LayeredCurator:

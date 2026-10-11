@@ -20,7 +20,7 @@ from munchhausen.domain.episode import EVALUATION_ONLY_FIELDS, Episode
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.lens import LensEntry, LensWeights
 from munchhausen.domain.observation import Observation, ObservationDisposition
-from munchhausen.domain.registers import Cursor, PlantedMapping, RoundRecord, RunRecord, SpendRow, Term
+from munchhausen.domain.registers import Cursor, PlantedMapping, RoundRecord, RunRecord, SpendRow, Term, ToolAccess
 from munchhausen.store.codec import from_doc, to_doc
 from munchhausen.store.names import C
 
@@ -87,6 +87,22 @@ class AtlasEpisodes(_Ledger[Episode]):
         return DirectionRead(misses_in=row["in"]["misses"], n_in=row["in"]["n"],
                              misses_out=row["out"]["misses"], n_out=row["out"]["n"])
 
+    async def backtest_sample(self, run_id: str, arm: str, match: dict[str, Any], *, n: int,
+                              seed: int | None) -> list[Episode]:
+        def branch(correct: bool) -> Pipeline:
+            head: Pipeline = [{"$match": {"correct": correct}}]
+            if seed is None:
+                return [*head, {"$sample": {"size": n}}]
+            key = {"$toHashedIndexKey": {"$concat": [f"{seed}:", {"$toString": "$_id"}]}}
+            return [*head, {"$addFields": {"_bk": key}}, {"$sort": {"_bk": 1, "_id": 1}}, {"$limit": n},
+                    {"$project": {"_bk": 0}}]
+
+        pipeline: Pipeline = [{"$match": {**match, "run_id": run_id, "arm": arm}},
+                              {"$facet": {"hits": branch(True), "misses": branch(False)}}]
+        docs = await (await self._c.aggregate(pipeline)).to_list()
+        hits, misses = (docs[0]["hits"], docs[0]["misses"]) if docs else ([], [])
+        return [Episode.model_validate(d) for d in balance(hits, misses, n)]
+
 
 class AtlasObservations(_Ledger[Observation]):
     model = Observation
@@ -112,6 +128,10 @@ class AtlasFires(_Ledger[Fire]):
         await self._c.update_many({"_id": {"$in": list(fire_ids)}},
                                   {"$set": {"disposition": disposition.value, "disposer": disposer.value}})
 
+    async def for_decision(self, decision_id: str) -> list[Fire]:
+        cur = self._c.find({"decision_id": decision_id}).sort("at_idx", 1)
+        return [Fire.model_validate(d) async for d in cur]
+
 
 class AtlasDrafts(_Ledger[Draft]):
     model = Draft
@@ -126,6 +146,10 @@ class AtlasDrafts(_Ledger[Draft]):
 
 class AtlasBacktests(_Ledger[Backtest]):
     model = Backtest
+
+    async def for_arm(self, run_id: str, arm: str) -> list[Backtest]:
+        cur = self._c.find({"run_id": run_id, "arm": arm}).sort("$natural", 1)
+        return [Backtest.model_validate(d) async for d in cur]
 
 
 class AtlasCursors:
@@ -188,6 +212,9 @@ class AtlasToolAccess:
 
     async def view_map(self, run_id: str, arm: str) -> dict[str, str]:
         return {d["logical"]: d["view"] async for d in self._c.find({"run_id": run_id, "arm": arm})}
+
+    async def rewires(self, run_id: str, arm: str) -> list[ToolAccess]:
+        return [ToolAccess.model_validate(d) async for d in self._c.find({"run_id": run_id, "arm": arm})]
 
 
 class AtlasTerms:
@@ -478,3 +505,14 @@ def repositories(db: AsyncDatabase[Doc], lease_ttl_s: int, seed_weights: LensWei
         "spend": AtlasSpend(db[C.SPEND.value]),
         "lenses": AtlasLenses(db[C.LENSES.value], db[C.LENS_WEIGHTS.value], seed_weights),
     }
+
+
+def balance[T](hits: Sequence[T], misses: Sequence[T], n: int) -> list[T]:
+    """Half from each stratum; a short stratum is topped up from the other's remainder, in branch order."""
+    h, m = list(hits[: n // 2]), list(misses[: n - n // 2])
+    short = n - len(h) - len(m)
+    if short > 0:
+        h += list(hits[len(h): len(h) + short])
+        short = n - len(h) - len(m)
+        m += list(misses[len(m): len(m) + short])
+    return h + m
