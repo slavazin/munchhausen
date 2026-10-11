@@ -28,7 +28,8 @@ def doctor() -> None:
     """Show which knobs and keys are configured (never prints secret values)."""
     s = settings()
     keys = ["mongodb_uri", "mongodb_uri_learner", "mongodb_uri_evaluator", "mongodb_uri_executor",
-            "anthropic_api_key", "voyage_api_key", "typesafe_api_key", "raindrop_write_key", "raindrop_query_key"]
+            "anthropic_api_key", "anthropic_auth_token",
+            "voyage_api_key", "typesafe_api_key", "raindrop_write_key", "raindrop_query_key"]
     _print({"keys": {k: getattr(s, k) is not None for k in keys}, "arms": sorted(s.arms()),
             "run_id": s.run_id, "pack": s.world_pack, "models": {"proposer": s.proposer_model,
             "observer": s.observer_model, "nominator": s.nominator_model}})

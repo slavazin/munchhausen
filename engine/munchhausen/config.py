@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from munchhausen.domain.arm import ArmSpec
@@ -48,9 +48,14 @@ class Settings(BaseSettings):
     search_index_cap: int = 3           # M0/Flex sandbox: 3 search-type indexes in total; verify at M0
 
     # --- keys (SDKs also read their own env vars; held here so `doctor` can report presence) ---------
+    # Aliases accept the names the user's `.env` carries; the canonical UPPER_CASE names still win.
     anthropic_api_key: SecretStr | None = None
-    voyage_api_key: SecretStr | None = None
-    typesafe_api_key: SecretStr | None = None
+    anthropic_auth_token: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("ANTHROPIC_AUTH_TOKEN", "anthropic_auth_token", "claude_oauth_key"))
+    voyage_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("VOYAGE_API_KEY", "voyage_api_key", "voyage_key"))
+    typesafe_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("TYPESAFE_API_KEY", "typesafe_api_key", "typesafe_key"))
     raindrop_write_key: SecretStr | None = None
     raindrop_query_key: SecretStr | None = None
 
