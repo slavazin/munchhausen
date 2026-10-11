@@ -49,7 +49,10 @@ class Settings(BaseSettings):
 
     # --- keys (SDKs also read their own env vars; held here so `doctor` can report presence) ---------
     # Aliases accept the names the user's `.env` carries; the canonical UPPER_CASE names still win.
-    anthropic_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key", "anthropic_munch_key"))
+    # An organization-level key not scoped to a workspace must send `anthropic-workspace-id` on every request.
+    anthropic_workspace_id: str | None = None
     anthropic_auth_token: SecretStr | None = Field(
         default=None, validation_alias=AliasChoices("ANTHROPIC_AUTH_TOKEN", "anthropic_auth_token", "claude_oauth_key"))
     voyage_api_key: SecretStr | None = Field(
