@@ -43,7 +43,8 @@ RUN = "wt-s6-test"
 
 @pytest.fixture
 def s(settings_offline: Settings) -> Settings:
-    return settings_offline.model_copy(update={"viewer_run_id": RUN})
+    return settings_offline.model_copy(update={"viewer_run_id": RUN, "run_id": RUN,
+                                               "viewer_allowed_hosts": ("127.0.0.1", "localhost", "testserver")})
 
 
 @pytest.fixture
@@ -112,6 +113,11 @@ def test_why_term_walks_the_tombstone_chain(client: TestClient) -> None:
 def test_hero_episode_and_scrubber(client: TestClient) -> None:
     e = client.get("/api/episode", params={"arm": "governed", "at": 200}).json()
     assert e["idx"] == 200 and "consulted" in e and "resolved_collection" in e
+
+
+def test_v_points_read_v_at(client: TestClient) -> None:
+    c = client.get("/api/curves").json()
+    assert c["v"] and all(v["idx"] >= 0 for v in c["v"])         # placed at v_at, never the negative ordinal
 
 
 def test_owner_port_unwired_is_501(client: TestClient) -> None:
@@ -198,8 +204,10 @@ class FakeForward:
     def __init__(self, world: Any) -> None:
         self.world = world
 
-    async def run(self, idx: int, question: Question, *, stream: str = "stream") -> Episode:
-        j = await self.world.judge(question, 100, idx, with_authority=True)
+    async def run(self, idx: int, question: Question, *, stream: str = "stream",
+                  at_idx: int | None = None) -> Episode:
+        self.at_idx = at_idx
+        j = await self.world.judge(question, 100, at_idx if at_idx is not None else idx, with_authority=True)
         return Episode(_id=episode_id(RUN, "governed", idx, stream=stream, question_id=question.id), run_id=RUN,
                        arm="governed", idx=idx, question_id=question.id, text=question.text,
                        template=question.template, persona=question.persona, terms=("active customers",),
@@ -221,6 +229,10 @@ class Repo:
     async def dispose(self, ids: Sequence[str], disposition: ObservationDisposition, by: str) -> None:
         for i in ids:
             self.rows[i] = self.rows[i].model_copy(update={"disposition": disposition, "disposed_by": by})
+
+    async def record(self, draft_id: str, outcome: LayerOutcome) -> None:
+        d = self.rows[draft_id]
+        self.rows[draft_id] = d.model_copy(update={"adjudication": {**d.adjudication, outcome.layer: outcome}})
 
 
 class FakeEpisodes:
@@ -254,34 +266,50 @@ class FakeNominator:
 
 
 class FakeAdjudicator:
-    """Stands in for S4: L0–L4, with a paired backtest that refuses (0 fixed, 2 broken)."""
+    """Stands in for S4: L0–L4, with a paired backtest that refuses (0 fixed, 2 broken). Like the real one,
+    it rewrites the draft's `adjudication` with its own outcomes."""
 
-    def __init__(self, backtests: Repo) -> None:
-        self.backtests = backtests
+    def __init__(self, backtests: Repo, drafts: Repo | None = None, fail: bool = False) -> None:
+        self.backtests, self.drafts, self.fail = backtests, drafts, fail
         self.seen: list[tuple[Draft, CurationContext]] = []
 
     async def adjudicate(self, draft: Draft, ctx: CurationContext) -> list[LayerOutcome]:
         self.seen.append((draft, ctx))
+        if self.fail:
+            raise RuntimeError("adjudicator down")
         rows = tuple(BacktestSample(episode_id=f"e{k}", template="trades_by_symbol", original_correct=True,
                                     replay_correct=k >= 2, baseline_correct=True) for k in range(4))
         bt = Backtest.read(id=backtest_id(draft.id), run_id=ctx.run_id, arm=ctx.arm, draft_id=draft.id,
                            sampled=rows, source_templates=frozenset(TEMPLATES[:2]),
                            thresholds=Settings(_env_file=None).backtest_thresholds)
         await self.backtests.put(bt)
-        return [LayerOutcome(layer=k, role=None, verdict=Verdict.PASS) for k in ("L0", "L1")] + [
+        out = [LayerOutcome(layer=k, role=None, verdict=Verdict.PASS) for k in ("L0", "L1")] + [
             LayerOutcome(layer="L4", role=LayerRole.DISPOSITIVE, verdict=Verdict.REFUSE)]
+        if self.drafts is not None:
+            await self.drafts.put(draft.model_copy(update={"adjudication": {o.layer: o for o in out}}))
+        return out
 
 
-def make_injector(s: Settings) -> tuple[Injector, Repo, FakeAdjudicator]:
+def make_injector(s: Settings, fail: bool = False) -> tuple[Injector, Repo, FakeAdjudicator]:
     obs, drafts, bts = Repo(), Repo(), Repo()
-    adj = FakeAdjudicator(bts)
+    adj = FakeAdjudicator(bts, drafts, fail=fail)
     inj = Injector(world=FakeWorld(), forward_for=FakeForward, nominator=FakeNominator(), adjudicator=adj,
                    observations=obs, drafts=drafts, backtests=bts, cursors=FakeCursors(),  # type: ignore[arg-type]
                    episodes=FakeEpisodes(),  # type: ignore[arg-type]
                    bar=Bar(min_obs=s.bar_min_obs, min_templates=s.bar_min_templates, min_gap=s.bar_min_gap,
                            min_matched=s.bar_min_matched),
-                   params=InjectParams(seed=s.inject_seed, scan_max=s.inject_scan_max, rel_tol=s.score_rel_tol))
+                   params=InjectParams(seed=s.inject_seed, scan_max=s.inject_scan_max, rel_tol=s.score_rel_tol,
+                                       idx_base=s.inject_idx_base, max_templates=s.inject_max_templates),
+                   trace=EventLog())
     return inj, obs, adj
+
+
+class EventLog:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def event(self, name: str, payload: dict[str, Any]) -> None:
+        self.events.append((name, payload))
 
 
 async def test_injected_world_returns_the_operators_figure() -> None:
@@ -310,16 +338,23 @@ def test_pick_questions_refuses_unknown_template() -> None:
 async def test_injection_ends_with_the_backtest_record(s: Settings) -> None:
     inj, obs, adj = make_injector(s)
     steps: list[str] = []
-    req = InjectionRequest(run_id=RUN, arm="governed", templates=TEMPLATES[:2], figure=4242,
-                           phrasing="active customers", per_template=1)
+    req = InjectionRequest(run_id=RUN, arm="governed", templates=(*TEMPLATES[:2], TEMPLATES[0]), figure=4242,
+                           phrasing="active customers", per_template=1, job_id="j1")
     res = await inj.run(req, lambda name, payload: steps.append(name))
+    assert res.request.templates == TEMPLATES[:2]                    # deduped
     assert all(e.stream == INJECTION_STREAM and e.figure == 4242 for e in res.episodes)
-    assert sorted(e.idx for e in res.episodes) == [-2, -1]          # unique, never a stream index
+    base = s.inject_idx_base                                         # far below V's negative ordinals
+    assert sorted(e.idx for e in res.episodes) == [base - 1, base]
+    assert inj.forward_for is FakeForward
     assert len(res.observations) == 2 and all(o.via is Via.INJECTION for o in obs.rows.values())
     assert all(o.surfaces.phrasing == "active customers" for o in res.observations)
-    assert all(o.disposition is ObservationDisposition.SPENT for o in obs.rows.values())   # refused → spent
+    assert all(o.disposition is ObservationDisposition.SPENT and o.disposed_by == "injection:j1"
+               for o in obs.rows.values())
     draft, ctx = adj.seen[0]
-    assert draft.adjudication["bar"].detail["direction_read"] == "skipped"
+    assert draft.source == "injection" and draft.adjudication["bar"].detail["direction_read"] == "skipped"
+    stored = adj.drafts.rows[draft.id]                               # re-recorded after the adjudicator rewrote it
+    assert stored.adjudication["bar"].detail["direction_read"] == "skipped" and "L4" in stored.adjudication
+    assert [n for n, _ in inj.trace.events] == ["injection.started", "injection.finished"]
     assert ctx.at_idx == 412 and {o.id for o in ctx.sources} == {o.id for o in res.observations}
     assert res.backtest is not None and res.backtest.verdict.value == "refuse" and res.backtest.broken == 2
     assert steps[0] == "questions" and steps[-1] == "done" and res.summary()["backtest"]["fixed"] == 0
@@ -331,6 +366,46 @@ async def test_injection_on_one_template_holds_at_the_bar(s: Settings) -> None:
                            phrasing="active customers", per_template=2)
     res = await inj.run(req)
     assert not res.bar_cleared and res.draft is None and not adj.seen and "bar" in (res.stopped or "")
+    assert res.observations and all(o.disposition is ObservationDisposition.SPENT
+                                    for o in inj.observations.rows.values())   # a hold never leaks to the pass
+
+
+async def test_injection_failure_still_spends_its_evidence(s: Settings) -> None:
+    inj, obs, _ = make_injector(s, fail=True)
+    req = InjectionRequest(run_id=RUN, arm="governed", templates=TEMPLATES[:2], figure=4242,
+                           phrasing="active customers", per_template=1, job_id="boom")
+    with pytest.raises(RuntimeError):
+        await inj.run(req)
+    assert obs.rows and all(o.disposition is ObservationDisposition.SPENT and o.disposed_by == "injection:boom"
+                            for o in obs.rows.values())
+
+
+async def test_injection_caps_templates(s: Settings) -> None:
+    inj, _, _ = make_injector(s.model_copy(update={"inject_max_templates": 2}))
+    inj.params = InjectParams(seed=1, scan_max=50, rel_tol=1e-4, max_templates=2)
+    with pytest.raises(ValueError, match="at most 2"):
+        await inj.run(InjectionRequest(run_id=RUN, arm="governed", templates=TEMPLATES, figure=1,
+                                       phrasing="p", per_template=1))
+
+
+async def test_injection_models_tag_the_proposer_stage() -> None:
+    from munchhausen.loop.inject import InjectionModels
+    from munchhausen.ports.models import ProposerInput
+
+    seen: list[str] = []
+
+    class Base:
+        async def propose(self, inp: ProposerInput) -> str:
+            seen.append(inp.stage)
+            return "ok"
+
+        def observe(self) -> str:
+            return "delegated"
+
+    m = InjectionModels(Base(), "inject")
+    q = Question(id="q", text="t", template="t", persona="p", collections=())
+    await m.propose(ProposerInput(question=q, schema=SchemaSummary(collections={}), consulted=(), stage="retry"))
+    assert seen == ["inject"] and m.observe() == "delegated"
 
 
 def test_injection_through_the_app(s: Settings, rm: MemoryReadModel) -> None:
@@ -347,3 +422,107 @@ def test_injection_through_the_app(s: Settings, rm: MemoryReadModel) -> None:
             time.sleep(0.02)
         assert st["status"] == "done", st
         assert st["result"]["backtest"]["verdict"] == "refuse" and st["steps"][-1]["step"] == "done"
+
+
+def test_inject_route_refusals(s: Settings, rm: MemoryReadModel) -> None:
+    gate = asyncio.Event()
+
+    class Slow:
+        async def run(self, req: InjectionRequest, on_step: Any = None) -> Any:
+            await gate.wait()
+            raise RuntimeError("stopped")
+
+    svc = ViewerServices(settings=s, read_model=rm, arms=s.arms(), injector_for=lambda arm: Slow())  # type: ignore
+    body = {"templates": list(TEMPLATES[:2]), "figure": 1, "phrasing": "p"}
+    with TestClient(create_app(svc)) as c:
+        assert c.post("/api/inject", json={**body, "run": "another-run"}).status_code == 400
+        assert c.post("/api/inject", json={**body, "templates": list(TEMPLATES) + ["x", "y"]}).status_code == 400
+        assert c.post("/api/inject", json=body).status_code == 200
+        assert c.post("/api/inject", json=body).status_code == 409          # one job per (run, arm)
+        assert c.get("/api/config", headers={"host": "evil.example"}).status_code == 400   # Host check
+
+
+# --- containment in the stores --------------------------------------------------------------------
+
+
+async def test_open_for_pass_excludes_injected_evidence() -> None:
+    from munchhausen.store.repositories import AtlasObservations
+
+    seen: list[dict[str, Any]] = []
+
+    class Cursor:
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise StopAsyncIteration
+
+    class Coll:
+        def find(self, q: dict[str, Any]) -> Cursor:
+            seen.append(q)
+            return Cursor()
+
+    repo = AtlasObservations(Coll())  # type: ignore[arg-type]
+    await repo.open_for_pass(RUN, "governed", since_round=0)
+    await repo.open_for_pass(RUN, "governed", since_round=0, exclude_via=())
+    assert seen[0]["via"] == {"$nin": ["injection"]} and "via" not in seen[1]
+
+
+def test_injector_for_builds_against_a_real_harness(s: Settings) -> None:
+    """`commands.viewer.injector_for` wires the real seams: Harness.forward_pass with the stage-tagged
+    models, bootstrap_learn.nominator_for/adjudicator_for, the store's repositories, and the knobs."""
+    from munchhausen.bootstrap import Harness
+    from munchhausen.commands.viewer import injector_for
+    from munchhausen.learn.adjudicate import Adjudicator
+    from munchhausen.learn.nominate import Nominator
+    from munchhausen.loop.episode import ForwardPass
+    from munchhausen.loop.inject import InjectionModels
+
+    class FakeStore:
+        def __init__(self) -> None:
+            for name in ("episodes", "observations", "decisions", "fires", "drafts", "backtests", "cursors",
+                         "leases", "tool_access", "terms", "runs", "spend", "lenses"):
+                setattr(self, name, Repo())
+
+        def world(self) -> Any:
+            return object()
+
+        def world_writer(self) -> Any:
+            return object()
+
+    class FakeModels:
+        async def observe(self, episode: Episode) -> list[Any]:
+            return []
+
+    h = Harness(settings=s, store=FakeStore(), arms=s.arms())  # type: ignore[arg-type]
+    h.ports["_run"] = {"world": FakeWorld(), "models": FakeModels()}
+    inj = injector_for(h, "governed")
+    assert isinstance(inj.nominator, Nominator) and isinstance(inj.adjudicator, Adjudicator)
+    assert inj.params.idx_base == s.inject_idx_base and inj.params.max_templates == s.inject_max_templates
+    assert inj.observations is h.store.observations and inj.episodes is h.store.episodes
+    fp = inj.forward_for(FakeWorld())  # type: ignore[arg-type]
+    assert isinstance(fp, ForwardPass) and isinstance(fp.proposer.models, InjectionModels)
+    assert fp.run_id == s.run_id and fp.arm.name == "governed"
+
+
+def test_round_record_excludes_the_injection() -> None:
+    from munchhausen.store.repositories import round_pipeline
+
+    p = str(round_pipeline(RUN, "governed", 3, (90, 120), inject_stage="inject"))
+    assert "'source': {'$ne': 'injection'}" in p and "'via': {'$ne': 'injection'}" in p
+    assert "'meta.stage': {'$ne': 'inject'}" in p
+
+
+async def test_owner_port_refuses_admitting_injected_evidence(s: Settings) -> None:
+    from munchhausen.bootstrap_learn import OwnerRefused, owner_port
+
+    inj, obs, adj = make_injector(s)
+    await inj.run(InjectionRequest(run_id=RUN, arm="governed", templates=TEMPLATES[:2], figure=4242,
+                                   phrasing="active customers", per_template=1))
+    draft = next(iter(adj.drafts.rows.values()))
+
+    class H:
+        store = type("S", (), {"drafts": adj.drafts, "observations": obs, "cursors": FakeCursors()})()
+
+    with pytest.raises(OwnerRefused, match="injected"):
+        await owner_port(H()).dispose_draft(draft.id, "admit", "")

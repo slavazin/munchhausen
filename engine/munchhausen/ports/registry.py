@@ -36,6 +36,9 @@ REGISTRY: dict[str, dict[str, str]] = {
         "agglomerative": "munchhausen.impl.grouper:AgglomerativeGrouper",
         "signature-buckets": "munchhausen.impl.grouper:SignatureBucketGrouper",   # E2; works with no embedder
     },
+    "read_model": {
+        "atlas": "munchhausen.store.read_models:AtlasReadModel",   # the viewer's read-only aggregations (S6)
+    },
     "lens_panel": {
         "jev": "munchhausen.impl.lens_panel:JevLensPanel",
         "none": "munchhausen.impl.lens_panel:NoLensPanel",

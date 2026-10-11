@@ -247,7 +247,7 @@ function renderDecisions(rows) {
       <div class="row"><span class="tag">${esc(d.kind)}</span>
         <span class="tag ${d.status === "admitted" ? "t-ok" : ""}">${esc(d.status)}</span>
         <span class="tag ${d.evidence_state === "contested" ? "t-bad" : ""}">${esc(d.evidence_state)}</span>
-        <span class="mono muted grow" style="text-align:right">${esc(d.id)} · idx ${d.lifecycle.admitted_at}${d.status !== "admitted" ? `→${d.lifecycle.at_idx}` : ""}</span></div>
+        <span class="mono muted grow" style="text-align:right" title="admission index read from the draft's round when the decision has left admitted (approximate)">${esc(d.id)} · idx ${d.lifecycle.status === "admitted" ? "" : "≈"}${d.lifecycle.admitted_at}${d.status !== "admitted" ? `→${d.lifecycle.at_idx}` : ""}</span></div>
       <div class="title">${esc(d.title)}</div><div class="payload">${esc(d.payload)}</div>
       <div>${fan(d.fan)}</div>
       ${btCells(d.backtest)}
@@ -344,7 +344,7 @@ function renderFacets(rows) {
     const n = rows.filter((r) => r.arm === a && r.template === t).reduce((s, r) => s + r.n, 0); return n ? `${ok}/${n}` : "—"; };
   $("facets").innerHTML = `<table class="facets"><tr><th></th>${arms.map((a) => `<th style="color:${color(a)}">${esc(a)}</th>`).join("")}</tr>` +
     tpl.map((t) => `<tr><td class="mono" style="text-align:left">${esc(t)}</td>${arms.map((a) => `<td>${cell(a, t)}</td>`).join("")}</tr>`).join("") + "</table>" +
-    `<div class="muted" style="font-size:11px">matches the figure / episodes, all streams</div>`;
+    `<div class="muted" style="font-size:11px">first attempts matching the figure / stream episodes (stream "stream", idx ≤ scrubber), per arm × template</div>`;
 }
 
 // ---------- why ----------
@@ -362,7 +362,7 @@ async function runWhy() {
         return `<div class="node ${esc(d.lifecycle.status)} ${d.id === w.root ? "root" : ""}">
           <div class="row"><span class="tag">${esc(d.kind)}</span><span class="tag ${d.lifecycle.status === "admitted" ? "t-ok" : ""}">${esc(d.lifecycle.status)}</span>
           <span class="tag ${d.evidence_state === "contested" ? "t-bad" : ""}">${esc(d.evidence_state)}</span>
-          <span class="mono muted">${esc(d.id)} · admitted idx ${d.lifecycle.admitted_at}${d.lifecycle.status !== "admitted" ? ` · ${esc(d.lifecycle.status)} idx ${d.lifecycle.at_idx}` : ""}</span></div>
+          <span class="mono muted">${esc(d.id)} · admitted idx ${d.lifecycle.status === "admitted" ? "" : "≈"}${d.lifecycle.admitted_at}${d.lifecycle.status !== "admitted" ? ` · ${esc(d.lifecycle.status)} idx ${d.lifecycle.at_idx}` : ""}</span></div>
           <div class="title" style="font-weight:600">${esc(d.title)}</div><div class="muted">${esc(d.payload)}</div>
           <div>${fan(d.fan)}</div>${btCells(d.backtest)}
           ${d.lifecycle.superseded_by ? `<div class="mono">tombstone → superseded by ${esc(d.lifecycle.superseded_by)}</div>` : ""}
@@ -418,7 +418,7 @@ async function pollJob() {
       <div class="muted">${esc(d?.payload || "")}</div>
       <div class="mono" style="margin:4px 0">${Object.values(d?.adjudication || {}).map((o) => `${esc(o.layer)} ${esc(o.verdict)}${o.score !== null && o.score !== undefined ? ` (${fmt(o.score)})` : ""}`).join(" → ")}</div>
       ${bt ? `<div><b>backtest record</b> — ${bt.verdict === "refuse" ? "refused" : "admitted"}: ${bt.fixed} fixed, ${bt.broken} broken over ${bt.n} paired replays against confirmed figures</div>${btCells(bt)}` : '<div class="muted">no backtest record yet</div>'}
-      ${S.cfg.owner ? `<div class="row" style="margin-top:6px"><button data-owner="admit">owner: admit (L5)</button><button data-owner="refuse">owner: refuse (L5)</button></div>` : ""}</div>`;
+      ${S.cfg.owner ? `<div class="row" style="margin-top:6px"><button data-owner="refuse">owner: refuse (L5)</button><span class="muted" style="font-size:12px">owner admit is refused for injected evidence</span></div>` : ""}</div>`;
     $("injResult").querySelectorAll("[data-owner]").forEach((b) => b.onclick = async () => {
       try { await post("/api/owner/draft", { id: r.draft, verdict: b.dataset.owner, note: "owner override from the viewer" }); refresh(); } catch (e) { alert(e.message); } });
   }

@@ -11,13 +11,12 @@ of the draft's round.
 
 Atlas primitives exercised here: `$graphLookup` (lineage, both directions), `$lookup` (why, fires →
 residuals), `$setWindowFields` (rolling accuracy, confidence, paired difference), `$densify` + `$fill`
-(gap-free round curves), `$searchMeta` (facets, when `episodes_search` exists; else `$group`), change
+(gap-free round curves), `$group` facets (`$searchMeta` needs `episodes_search`, over the index cap), change
 streams with pre- and post-images and resume tokens, and `explain()` of the hook match.
 """
 
 from __future__ import annotations
 
-import contextlib
 import re
 from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
@@ -375,9 +374,10 @@ class AtlasReadModel:
                           "gap": {"$subtract": ["$conf", "$acc"]}}},
             {"$sort": {"arm": 1, "idx": 1}},
         ])
+        # V episodes carry a negative ordinal `idx` and their V point's stream index in `v_at` (S2 runner)
         v_points = await self._agg(C.EPISODES, [
-            {"$match": {"run_id": run_id, "stream": "v", **_idx_le("idx", at)}},
-            {"$group": {"_id": {"arm": "$arm", "idx": "$idx"}, "acc": {"$avg": {"$cond": ["$correct", 1, 0]}},
+            {"$match": {"run_id": run_id, "stream": "v", "v_at": {"$ne": None}, **_idx_le("v_at", at)}},
+            {"$group": {"_id": {"arm": "$arm", "idx": "$v_at"}, "acc": {"$avg": {"$cond": ["$correct", 1, 0]}},
                         "n": {"$sum": 1}}},
             {"$project": {"_id": 0, "arm": "$_id.arm", "idx": "$_id.idx", "acc": 1, "n": 1}},
             {"$sort": {"arm": 1, "idx": 1}},
@@ -564,20 +564,10 @@ class AtlasReadModel:
     # --- facets ------------------------------------------------------------------------------------
 
     async def facets(self, run_id: str, *, at: int | None) -> list[Doc]:
-        has_search = False
-        with contextlib.suppress(OperationFailure):
-            has_search = any([ix.get("name") == "episodes_search"
-                              async for ix in await self._c(C.EPISODES).list_search_indexes()])
-        if has_search:
-            with contextlib.suppress(PyMongoError):
-                rows = await self._agg(C.EPISODES, [{"$searchMeta": {
-                    "index": "episodes_search",
-                    "facet": {"operator": {"equals": {"path": "run_id", "value": run_id}},
-                              "facets": {"arm": {"type": "string", "path": "arm"},
-                                         "template": {"type": "string", "path": "template"}}}}}])
-                return jsonable([{"source": "$searchMeta", **(rows[0] if rows else {})}])
+        """Population: stream episodes (`stream: "stream"`, idx ≤ `at`) by arm × template × first-attempt
+        correct. `$group`: `episodes_search` is over the sandbox's search-index cap, so `$searchMeta` is not used."""
         rows = await self._agg(C.EPISODES, [
-            {"$match": {"run_id": run_id, **_idx_le("idx", at)}},
+            {"$match": {"run_id": run_id, "stream": "stream", **_idx_le("idx", at)}},
             {"$group": {"_id": {"arm": "$arm", "template": "$template", "correct": "$correct"}, "n": {"$sum": 1}}},
             {"$project": {"_id": 0, "arm": "$_id.arm", "template": "$_id.template", "correct": "$_id.correct",
                           "n": 1}},
