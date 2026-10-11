@@ -6,12 +6,22 @@ are tested against the same definition.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from munchhausen.domain.common import FireRole, Signature, Value
 from munchhausen.domain.question import QuestionKeys
+
+
+def norm_term(term: str) -> str:
+    """A term as hooks compare it: lower-case, single-spaced (L0 lowercases; extraction emits lower case)."""
+    return " ".join(term.lower().split())
+
+
+def norm_terms(terms: Iterable[str]) -> set[str]:
+    return {norm_term(t) for t in terms}
 
 
 class KeySet(Value):
@@ -31,7 +41,7 @@ class NotThisRow(KeySet):
         if self.is_empty():
             return False
         return (
-            set(self.terms) <= keys.terms
+            norm_terms(self.terms) <= norm_terms(keys.terms)
             and set(self.collections) <= keys.collections
             and (self.persona is None or self.persona == keys.persona)
         )
@@ -47,7 +57,7 @@ class HookLatch(Value):
         fw = self.fires_when
         if fw.persona is not None and fw.persona != keys.persona:
             return False
-        if not (set(fw.terms) & keys.terms or set(fw.collections) & keys.collections):
+        if not (norm_terms(fw.terms) & norm_terms(keys.terms) or set(fw.collections) & keys.collections):
             return False
         return not any(row.all_present(keys) for row in self.not_this)
 

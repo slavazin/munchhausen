@@ -26,8 +26,9 @@ from dataclasses import dataclass
 from munchhausen.agent.consultation import Consulter
 from munchhausen.agent.execute import ExecutionError, execute
 from munchhausen.agent.proposer import Proposer
+from munchhausen.agent.usage import CURRENT_EPISODE, CURRENT_EPISODE_ID, EpisodeUsage
 from munchhausen.domain.arm import ArmSpec
-from munchhausen.domain.common import Disposition, FireRole, Pipeline
+from munchhausen.domain.common import Answer, Disposition, FireRole, Pipeline
 from munchhausen.domain.decision import Decision
 from munchhausen.domain.episode import Episode, Judgement, Proposal, confirmed_figure
 from munchhausen.domain.fire import Fire, FireCause
@@ -43,6 +44,13 @@ from munchhausen.ports.world import World
 log = logging.getLogger(__name__)
 
 STREAM, V = "stream", "v"
+EPISODE_FAILED = "episode_failed"      # `error` prefix of an episode whose forward pass never completed
+UNPARSED = "$unparsed"                 # the stage the proposer party writes for a pipeline that did not parse
+
+
+def failed(episode: Episode) -> bool:
+    """An episode written by `record_failure`: kept for pairing, excluded from learning."""
+    return bool(episode.error) and str(episode.error).startswith(EPISODE_FAILED)
 
 
 @dataclass(frozen=True)
@@ -71,8 +79,21 @@ class ForwardPass:
         eid = episode_id(self.run_id, self.arm.name, at, stream=stream, question_id=question.id)
         authority = self.arm.authority and stream == STREAM
         ids = {"episode_id": eid, "arm": self.arm.name, "idx": idx, "stream": stream}
+        usage = EpisodeUsage(eid)
+        token, id_token = CURRENT_EPISODE.set(usage), CURRENT_EPISODE_ID.set(eid)
         self.trace.begin({**ids, "template": question.template})
+        answer: Answer = None
+        try:
+            episode = await self._run(idx, question, stream, at, eid, authority, ids, usage, t0)
+            answer = episode.answer
+            return episode
+        finally:
+            CURRENT_EPISODE.reset(token)
+            CURRENT_EPISODE_ID.reset(id_token)
+            self.trace.finish(answer)
 
+    async def _run(self, idx: int, question: Question, stream: str, at: int, eid: str, authority: bool,
+                   ids: dict[str, object], usage: EpisodeUsage, t0: float) -> Episode:
         keys, consulted = await self.consulter.consult(self.run_id, self.arm.name, question)
         self.trace.event("consultation_set", {**ids, "terms": sorted(keys.terms),
                                               "decision_ids": [d.id for d in consulted]})
@@ -94,7 +115,8 @@ class ForwardPass:
 
         residuals = ()
         if authority and not judgement.correct and judgement.figure is not None:
-            phrasing_terms = await self.store.terms.extract(judgement.phrasing) if judgement.phrasing else frozenset()
+            phrasing_terms = (await self.store.terms.extract(judgement.phrasing, run_id=self.run_id)
+                              if judgement.phrasing else frozenset())
             residuals = compute_residuals(eid, proposal.consulted, {d.id: d for d in consulted}, answer,
                                           judgement.figure, phrasing_terms, rounding_base=self.params.rounding_base)
 
@@ -108,7 +130,7 @@ class ForwardPass:
             phrasing=judgement.phrasing, confirmed_figure=confirmed_figure(answer, judgement)
             if authority else None, retry_pipeline=retry_pipeline, retry_correct=retry_correct,
             residuals=residuals, error=error, latency_ms=int((time.monotonic() - t0) * 1000), stream=stream,
-            collections=question.collections, v_at=at if stream == V else None,
+            collections=question.collections, v_at=at if stream == V else None, tokens=dict(usage.tokens),
             matched_ids=tuple(d.id for d in consulted),
             pipeline_repairs=proposal.repairs,
         )
@@ -118,7 +140,24 @@ class ForwardPass:
                                              "residual_ids": [r.id for r in residuals]})
         if stream == STREAM:
             await self._fires(episode, {d.id: d for d in consulted})
-        self.trace.finish(answer)
+        return episode
+
+    async def record_failure(self, idx: int, question: Question, error: str, *, stream: str = STREAM,
+                             at_idx: int | None = None) -> Episode:
+        """The episode of an index whose forward pass raised on every attempt: written so the index stays
+        paired and the round closes. `correct=False`, no confirmed figure, no consultation, no residuals; the
+        `error` prefix `EPISODE_FAILED` excludes it from learning, and a resume retries it."""
+        at = idx if at_idx is None else at_idx
+        eid = episode_id(self.run_id, self.arm.name, at, stream=stream, question_id=question.id)
+        episode = Episode(
+            _id=eid, run_id=self.run_id, arm=self.arm.name, idx=idx, question_id=question.id, text=question.text,
+            template=question.template, persona=question.persona, terms=(), world_version="", consulted=(),
+            collection=question.collections[0] if question.collections else "", pipeline=[], answer_path="",
+            view_map={}, answer=None, confidence=0.0, correct=False, error=f"{EPISODE_FAILED}: {error}",
+            stream=stream, collections=question.collections, v_at=at if stream == V else None)
+        await self.store.episodes.put(episode)
+        self.trace.event("episode_failed_written", {"episode_id": eid, "arm": self.arm.name, "idx": idx,
+                                                    "stream": stream, "error": error})
         return episode
 
     async def _propose(self, question: Question, schema: SchemaSummary, consulted: Sequence[Decision],
@@ -136,6 +175,9 @@ class ForwardPass:
     async def _execute(self, proposal: Proposal, view_map: dict[str, str],
                        ids: dict[str, object]) -> tuple[object, str | None]:
         target = view_map.get(proposal.collection, proposal.collection)
+        if any(isinstance(st, dict) and UNPARSED in st for st in proposal.pipeline):
+            self.trace.event("proposal_unparsed", {**ids, "collection": target})
+            return None, "proposer: pipeline did not parse as a JSON array of stages"
         self.trace.event("view_resolved", {**ids, "logical": proposal.collection, "resolved": target})
         try:
             ex = await execute(proposal, view_map, self.store.world(), max_time_ms=self.params.max_time_ms)
@@ -173,11 +215,17 @@ class ForwardPass:
                     continue
                 holds, eids, rids = guard_holds(recent, d.id, latch.guard)
                 if holds:
-                    await self._fire(Fire(
-                        _id=fire_id(d.id, latch.id, episode.idx), run_id=self.run_id, arm=self.arm.name,
+                    # one open dispositive fire per (decision, latch): the id names the latch's generation
+                    # (fires already disposed), so concurrent episodes that both see the guard hold write
+                    # the same id and only the first insert lands
+                    generation = await self.store.fires.disposed_count(d.id, latch.id)
+                    fire = Fire(
+                        _id=f"F-{d.id}-{latch.id}-g{generation}", run_id=self.run_id, arm=self.arm.name,
                         decision_id=d.id, latch=latch.id, role=FireRole.DISPOSITIVE, cause=FireCause.RESIDUALS,
-                        episode_ids=tuple(eids), residual_ids=tuple(rids), at_idx=episode.idx))
-                    touched.add(d.id)
+                        episode_ids=tuple(eids), residual_ids=tuple(rids), at_idx=episode.idx)
+                    if await self.store.fires.put_new(fire):
+                        self._fire_event(fire)
+                        touched.add(d.id)
             if not r.attributable:
                 await self._fire(Fire(
                     _id=fire_id(d.id, "unattributed", episode.idx), run_id=self.run_id, arm=self.arm.name,
@@ -196,6 +244,9 @@ class ForwardPass:
 
     async def _fire(self, fire: Fire) -> None:
         await self.store.fires.put(fire)
+        self._fire_event(fire)
+
+    def _fire_event(self, fire: Fire) -> None:
         self.trace.event("fire_raised", {"fire_id": fire.id, "decision_id": fire.decision_id, "arm": fire.arm,
                                          "latch": fire.latch, "role": fire.role.value, "cause": fire.cause.value,
                                          "at_idx": fire.at_idx, "episode_ids": list(fire.episode_ids)})

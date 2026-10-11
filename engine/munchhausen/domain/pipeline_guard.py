@@ -69,6 +69,43 @@ def lookup_targets(pipeline: Any) -> set[str]:
     return out
 
 
+def check_floor(collection: str, match: Any, *, collections: Iterable[str]) -> None:
+    """A floor view's definition passes the same sandbox as any pipeline: its `$match` is checked as
+    `[{"$match": match}]`, and the collection it shadows must be a world collection (never `system.*`)."""
+    names = frozenset(n for n in collections if not n.startswith("system."))
+    if collection not in names:
+        raise PipelineRefused(f"floor shadows {collection!r}, which is not a world collection")
+    if not isinstance(match, dict):
+        raise PipelineRefused("floor match must be an object")
+    check([{"$match": match}], targets=names)
+
+
+def rewrite_targets(pipeline: Any, view_map: dict[str, str]) -> Any:
+    """Route every `$lookup`/`$graphLookup`/`$unionWith` target through the tool-access register, at any
+    depth, so a floor view also binds pipelines that reach its collection from another one."""
+    if not isinstance(pipeline, list) or not view_map:
+        return pipeline
+    out: list[Any] = []
+    for stage in pipeline:
+        if not isinstance(stage, dict) or len(stage) != 1:
+            out.append(stage)
+            continue
+        (op, spec), = stage.items()
+        if op == "$unionWith" and isinstance(spec, str):
+            spec = view_map.get(spec, spec)
+        elif op in CROSS_STAGES and isinstance(spec, dict):
+            key = "coll" if op == "$unionWith" else "from"
+            spec = dict(spec)
+            if isinstance(spec.get(key), str):
+                spec[key] = view_map.get(spec[key], spec[key])
+            if "pipeline" in spec:
+                spec["pipeline"] = rewrite_targets(spec["pipeline"], view_map)
+        elif op == "$facet" and isinstance(spec, dict):
+            spec = {k: rewrite_targets(v, view_map) for k, v in spec.items()}
+        out.append({op: spec})
+    return out
+
+
 def capped(pipeline: list[dict[str, Any]], row_cap: int) -> list[dict[str, Any]]:
     """Append `$limit row_cap + 1`, so `check_rows` can tell a capped result from a complete one."""
     return [*pipeline, {"$limit": row_cap + 1}]

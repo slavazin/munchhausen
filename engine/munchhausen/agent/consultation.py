@@ -31,7 +31,7 @@ class HookConsulter:
     budget_tokens: int
 
     async def consult(self, run_id: str, arm: str, question: Question) -> tuple[QuestionKeys, list[Decision]]:
-        keys = QuestionKeys(terms=await self.terms.extract(question.text),
+        keys = QuestionKeys(terms=await self.terms.extract(question.text, run_id=run_id),
                             collections=frozenset(question.collections), persona=question.persona)
         matched = await self.decisions.match_hooks(run_id, arm, keys)
         return keys, await pack(question.text, matched, self.reranker, self.budget_tokens)
@@ -55,7 +55,7 @@ class SemanticConsulter:
     budget_tokens: int
 
     async def consult(self, run_id: str, arm: str, question: Question) -> tuple[QuestionKeys, list[Decision]]:
-        keys = QuestionKeys(terms=await self.terms.extract(question.text),
+        keys = QuestionKeys(terms=await self.terms.extract(question.text, run_id=run_id),
                             collections=frozenset(question.collections), persona=question.persona)
         admitted = {d.id: d for d in await self.decisions.admitted(run_id, arm)}
         if not admitted:

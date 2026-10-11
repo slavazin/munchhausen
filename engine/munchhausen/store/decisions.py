@@ -10,6 +10,7 @@ View DDL (create/drop of floor views in `world`) is not transactional, so the ap
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pymongo.asynchronous.client_session import AsyncClientSession
@@ -22,6 +23,11 @@ from munchhausen.domain.draft import DraftStatus
 from munchhausen.domain.question import QuestionKeys
 from munchhausen.store.codec import from_doc, to_doc
 from munchhausen.store.names import C
+
+
+def _term_pattern(term: str) -> re.Pattern[str]:
+    """S2: a hook term as the prefilter matches it: any case, any run of whitespace between its words."""
+    return re.compile(r"^\s*" + r"\s+".join(re.escape(w) for w in term.split()) + r"\s*$", re.IGNORECASE)
 
 
 class AtlasDecisions:
@@ -43,7 +49,9 @@ class AtlasDecisions:
         definition of a match (persona scope and `not_this`)."""
         query = {
             "run_id": run_id, "arm": arm, "lifecycle.status": LifecycleStatus.ADMITTED.value,
-            "$or": [{"latches.fires_when.terms": {"$in": sorted(keys.terms)}},
+            # case- and space-insensitive prefilter (a stored hook term may carry case); `HookLatch.matches`
+            # normalizes both sides and stays the one definition of a match
+            "$or": [{"latches.fires_when.terms": {"$in": [_term_pattern(t) for t in sorted(keys.terms)]}},
                     {"latches.fires_when.collections": {"$in": sorted(keys.collections)}}],
         }
         out = []

@@ -23,6 +23,7 @@ from munchhausen.domain.common import (
     Value,
 )
 from munchhausen.domain.latches import FloorLatch, HookLatch, Latch, RetireLatch, RevisitLatch, WiringLatch
+from munchhausen.domain.pipeline_guard import PipelineRefused, check
 
 
 class LifecycleError(ValueError):
@@ -147,6 +148,12 @@ class EntryContract(Value):
             out.append("kind floor requires a floor latch")
         if self.kind is not DecisionKind.FLOOR and self.floor is not None:
             out.append("a floor latch is allowed on kind floor only")
+        floor = self.floor
+        if floor is not None:   # the view's definition passes the runtime sandbox (collection checked at admit)
+            try:
+                check([{"$match": floor.match}], targets=())
+            except PipelineRefused as e:
+                out.append(f"floor match refused by the sandbox: {e}")
         leaked = leaked_figures(self.payload, source_figures)
         if leaked:
             out.append(f"payload contains a source figure: {leaked}")

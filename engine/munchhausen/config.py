@@ -130,6 +130,7 @@ class Settings(BaseSettings):
     fire_fetch_factor: int = 2          # consultations read per guard-window slot (V ones filtered)
     rounding_unit_base: int = 10        # rounding signature: unit = largest power of this base dividing the figure
     vocab_report_sample: int = 40       # terms printed by `seed-vocab`
+    debug_run_prefix: str = "debug-"    # `episode` writes under <prefix><RUN_ID>, never into the run itself
 
     # --- backward pass -------------------------------------------------------------------------------
     round_size: int = 30

@@ -16,6 +16,7 @@ from typing import Any
 from munchhausen.domain.admission import Admission
 from munchhausen.domain.common import Disposer, FireDisposition, FireRole
 from munchhausen.domain.decision import Decision
+from munchhausen.domain.pipeline_guard import check_floor
 from munchhausen.ports.sinks import MemorySink, Trace
 from munchhausen.ports.store import (
     DecisionRepository,
@@ -46,6 +47,8 @@ class LifecycleService:
         d = plan.decision
         floor = d.floor
         if plan.rewire is not None and floor is not None:
+            # S2 sandbox: the floor's definition passes the pipeline guard before any DDL (raises PipelineRefused)
+            check_floor(floor.collection, floor.match, collections=await self.world.collection_names())
             await self.world.create_view(plan.rewire.view, floor.collection, [{"$match": floor.match}])
             self._event("view.create", {"view": plan.rewire.view, "on": floor.collection, "match": floor.match,
                                         "decision_id": d.id})

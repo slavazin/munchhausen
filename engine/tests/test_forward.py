@@ -35,7 +35,7 @@ from munchhausen.domain.episode import Consultation, Episode, Judgement, Proposa
 from munchhausen.domain.fire import Fire
 from munchhausen.domain.latches import Guard, HookLatch, KeySet, RevisitLatch
 from munchhausen.domain.question import Question, QuestionKeys, SchemaSummary
-from munchhausen.domain.registers import Cursor, Term
+from munchhausen.domain.registers import Cursor, Term, term_run_key
 from munchhausen.impl.parties import proposer as proposer_party
 from munchhausen.impl.representation import NoRepresentation
 from munchhausen.impl.reranker import IdentityReranker
@@ -120,7 +120,7 @@ class FakeColl:
         limit = next((s["$limit"] for s in reversed(pipeline) if "$limit" in s), None)
         return _Cursor(self.rows[:limit] if limit else self.rows)
 
-    def find(self, filter: Any, projection: Any, limit: int = 0) -> _Cursor:  # noqa: A002
+    def find(self, filter: Any, projection: Any, limit: int = 0, **kw: Any) -> _Cursor:  # noqa: A002
         return _Cursor(self.rows[:limit] if limit else self.rows)
 
 
@@ -184,6 +184,16 @@ class FakeFires:
         return [f for f in self.rows.values() if f.decision_id == decision_id
                 and f.disposition is FireDisposition.OPEN]
 
+    async def put_new(self, f: Fire) -> bool:
+        if f.id in self.rows:
+            return False
+        self.rows[f.id] = f
+        return True
+
+    async def disposed_count(self, decision_id: str, latch: str) -> int:
+        return sum(1 for f in self.rows.values() if f.decision_id == decision_id and f.latch == latch
+                   and f.disposition is not FireDisposition.OPEN)
+
 
 class FakeCursors:
     def __init__(self) -> None:
@@ -222,8 +232,10 @@ class FakeLeases:
             return True
         return await self.acquire(run_id, arm, idx, worker)
 
-    async def release(self, run_id: str, arm: str, idx: int) -> None:
-        self.rows.pop((run_id, arm, idx), None)
+    async def release(self, run_id: str, arm: str, idx: int, *, worker: str | None = None) -> None:
+        held = self.rows.get((run_id, arm, idx))
+        if held is not None and (worker is None or held[0] == worker):
+            self.rows.pop((run_id, arm, idx), None)
 
 
 class FakeToolAccess:
@@ -235,14 +247,21 @@ class FakeTerms:
     def __init__(self, rows: Sequence[Term]) -> None:
         self.rows = list(rows)
 
-    async def all(self) -> list[Term]:
-        return self.rows
+    async def all(self, *, run_id: str | None = None) -> list[Term]:
+        return [r for r in self.rows if run_id is None or term_run_key(run_id) in r.runs]
 
     async def add(self, term: Term) -> None:
-        self.rows.append(term)
+        """As `AtlasTerms.add`: one row per term, runs as a membership map (earliest idx wins)."""
+        old = next((r for r in self.rows if r.term == term.term), None)
+        runs = dict(old.runs) if old else {}
+        if term.run_id is not None:
+            k = term_run_key(term.run_id)
+            runs[k] = min(runs.get(k, term.admitted_at_idx), term.admitted_at_idx)
+        new = (old or term).model_copy(update={"runs": runs})
+        self.rows = [r for r in self.rows if r.term != term.term] + [new]
 
-    async def extract(self, text: str) -> frozenset[str]:
-        return present_terms(text, self.rows)
+    async def extract(self, text: str, *, run_id: str | None = None) -> frozenset[str]:
+        return present_terms(text, await self.all(run_id=run_id))
 
     async def compile_synonyms(self) -> int:
         return 0
@@ -253,9 +272,8 @@ class FakeStore:
                  lease_ttl_s: float = 120.0) -> None:
         self.episodes, self.decisions, self.fires = FakeEpisodes(), FakeDecisions(decisions), FakeFires()
         self.cursors, self.leases, self.tool_access = FakeCursors(), FakeLeases(lease_ttl_s), FakeToolAccess()
-        self.terms = FakeTerms([Term(term=ACTIVE, source="question", admitted_at_idx=0),
-                                Term(term="customers", source="schema", admitted_at_idx=0),
-                                Term(term="limit", source="schema", admitted_at_idx=0)])
+        self.terms = FakeTerms([Term(term=t, source="question", admitted_at_idx=0, runs={"r": 0})
+                                for t in (ACTIVE, "customers", "limit")])
         self.db = FakeDB({"customers": rows if rows is not None else [{"n": 10}], "accounts": [{"n": 4}]})
 
     def world(self) -> GuardedReader:
@@ -504,7 +522,8 @@ def test_seeding_never_reads_the_pack() -> None:
               authority_phrasings=(PHRASING,)),))
     questions = [question(i) for i in range(10)] + [question(i, "control") for i in range(10)]
     terms = {t.term for t in seed_terms(SCHEMA, questions, min_questions=2, max_tokens=3)}
-    assert ACTIVE in terms and "customers" in terms and "tier and details" in terms and "tier" in terms
+    assert ACTIVE in terms and "customers" in terms and "tier and details" in terms
+    assert "tier" not in terms   # a path through a `$key` map placeholder is dropped whole (S1)
     assert "total" in terms and not any("$" in t or t == "key" or t == "id" for t in terms)
     assert not any(t in {"string", "int", "object", "objectid"} for t in terms)   # names only, never types
     banned = {pack.id, *(q.id.lower() for q in pack.quirks)}
@@ -568,3 +587,131 @@ def test_find_filters_are_guarded_too(bad: str) -> None:
 
     with pytest.raises(PipelineRefused):
         run(FakeStore().world().find("customers", {bad: "1"}))
+    with pytest.raises(PipelineRefused):     # projections carry expressions too
+        run(FakeStore().world().find("customers", {}, {"x": {bad: {"body": "f"}}}))
+
+
+# --- review fixes (S2 round 2) ------------------------------------------------------------------------------
+
+
+def test_backtester_via_bootstrap_learn_consults_through_the_arms_consulter(settings_offline: Settings) -> None:
+    from munchhausen import bootstrap_learn
+    from munchhausen.bootstrap import Harness
+
+    store = FakeStore([decision(arm="governed")])
+    store.backtests = None  # type: ignore[attr-defined]
+    h = Harness(settings=settings_offline.model_copy(update={"run_id": "r"}), store=store,  # type: ignore[arg-type]
+                arms=settings_offline.arms())
+    h.ports["_run"] = {"models": FakeModels(), "trace": FakeTrace()}
+    bt = bootstrap_learn.backtester_for(h, "governed")
+    keys, consulted = run(bt.consulter.consult("r", "governed", question(0)))
+    assert [d.id for d in consulted] == ["D-1"] and ACTIVE in keys.terms
+    assert h.ports["governed"]["consulter"] is h.consulter("governed") is bootstrap_learn.consulter(h, "governed")
+
+
+def test_floor_definitions_pass_the_sandbox() -> None:
+    from munchhausen.domain.common import DecisionKind as K
+    from munchhausen.domain.latches import FloorLatch
+    from munchhausen.domain.pipeline_guard import PipelineRefused, check_floor
+
+    check_floor("customers", {"st": {"$in": [2, 7]}}, collections=["customers", "accounts"])
+    for coll, match, names in (("decisions", {}, ["customers"]), ("system.views", {}, ["system.views"]),
+                               ("customers", {"$where": "1"}, ["customers"]),
+                               ("customers", {"$expr": {"$function": {"body": "f"}}}, ["customers"])):
+        with pytest.raises(PipelineRefused):
+            check_floor(coll, match, collections=names)
+    d = decision()
+    bad = d.model_copy(update={"kind": K.FLOOR, "latches": (*d.latches,
+                                                            FloorLatch(collection="customers", match={"$where": "1"}))})
+    assert any("sandbox" in v for v in bad.l0_violations([]))
+
+
+def test_cross_collection_reads_resolve_through_the_floor_view() -> None:
+    from munchhausen.agent.execute import execute
+    from munchhausen.domain.pipeline_guard import rewrite_targets
+
+    vm = {"customers": "customers__D-1"}
+    p = [{"$lookup": {"from": "customers", "as": "c", "pipeline": [{"$unionWith": "customers"}]}},
+         {"$facet": {"a": [{"$unionWith": {"coll": "customers", "pipeline": []}}]}},
+         {"$graphLookup": {"from": "customers", "startWith": "$a", "connectFromField": "a",
+                           "connectToField": "b", "as": "g"}}]
+    out = rewrite_targets(p, vm)
+    assert out[0]["$lookup"]["from"] == "customers__D-1"
+    assert out[0]["$lookup"]["pipeline"] == [{"$unionWith": "customers__D-1"}]
+    assert out[1]["$facet"]["a"][0]["$unionWith"]["coll"] == "customers__D-1"
+    assert out[2]["$graphLookup"]["from"] == "customers__D-1" and p[0]["$lookup"]["from"] == "customers"
+    store = FakeStore()
+    store.db.colls["customers__D-1"] = store.db.colls["customers"]
+    prop = Proposal(collection="accounts", pipeline=[{"$unionWith": "customers"}, {"$count": "n"}],
+                    answer_path="0.n", confidence=0.5, rationale="")
+    run(execute(prop, vm, store.world(), max_time_ms=100))
+    assert store.db.colls["accounts"].pipelines[-1][0] == {"$unionWith": "customers__D-1"}
+
+
+def test_concurrent_episodes_raise_one_dispositive_fire_per_latch() -> None:
+    store = FakeStore([decision()])
+    fp, trace = forward(store, arm())
+    run(fp.run(0, question(0)))
+
+    async def both() -> None:
+        await asyncio.gather(fp.run(2, question(2)), fp.run(4, question(4)), fp.run(6, question(6)))
+
+    run(both())
+    dispositive = [f for f in store.fires.rows.values() if f.role is FireRole.DISPOSITIVE]
+    assert len(dispositive) == 1 and dispositive[0].id.endswith("-g0")
+    assert trace.names().count("fire_raised") == 1
+
+
+def test_episode_tokens_sum_the_calls_made_inside_it() -> None:
+    from munchhausen.agent.usage import CURRENT_EPISODE
+
+    class Counting(FakeModels):
+        async def propose(self, inp: ProposerInput) -> Proposal:
+            usage = CURRENT_EPISODE.get()
+            assert usage is not None
+            from munchhausen.impl.models_anthropic import current_episode_id
+            assert current_episode_id() == usage.episode_id == "r:hooks:e0"   # spend meta.episode_id
+            usage.add(100, 20)          # what the shared call path does per call
+            return await super().propose(inp)
+
+    store = FakeStore([decision()])
+    fp, _ = forward(store, arm(), Counting())
+    ep = run(fp.run(0, question(0)))      # propose + retry: two calls
+    assert ep.tokens == {"in": 200, "out": 40, "calls": 2} and CURRENT_EPISODE.get() is None
+
+
+def test_terms_are_scoped_to_their_run() -> None:
+    terms = FakeTerms([])
+    run(terms.add(Term(term=ACTIVE, source="question", admitted_at_idx=7, run_id="a.1")))
+    run(terms.add(Term(term=ACTIVE, source="question", admitted_at_idx=3, run_id="a.1")))
+    run(terms.add(Term(term="revenue", source="question", admitted_at_idx=0, run_id="b")))
+    assert run(terms.extract("active customers and revenue", run_id="a.1")) == {ACTIVE}
+    assert run(terms.extract("active customers and revenue", run_id="b")) == {"revenue"}
+    assert terms.rows[0].runs == {"a_1": 3}
+    seeded = seed_terms(SCHEMA, [question(i) for i in range(4)], min_questions=2, max_tokens=3, run_id="r9")
+    assert {t.run_id for t in seeded} == {"r9"}
+
+
+def test_hook_terms_match_regardless_of_case_and_spacing() -> None:
+    d = decision(terms=("Active  Customers",))
+    assert d.hook.matches(QuestionKeys(terms=frozenset({ACTIVE}), collections=frozenset(), persona=None))
+
+
+def test_an_unparsed_pipeline_is_its_own_event_not_a_guard_refusal() -> None:
+    store = FakeStore()
+    fp, trace = forward(store, arm(), FakeModels(pipeline=[{"$unparsed": "not json"}]))
+    ep = run(fp.run(0, question(0)))
+    assert "proposal_unparsed" in trace.names() and "guard_refusal" not in trace.names()
+    assert ep.error and "did not parse" in ep.error
+
+
+def test_gold_reads_the_world_through_the_evaluation_side(settings_offline: Settings) -> None:
+    from munchhausen.bootstrap import _EvaluationStore
+
+    class S(FakeStore):
+        def world_evaluation(self) -> str:
+            return "unguarded"
+
+    assert _EvaluationStore(S()).world() == "unguarded"  # type: ignore[arg-type]
+    assert isinstance(_EvaluationStore(FakeStore()).world(), GuardedReader)  # type: ignore[arg-type]
+    assert _EvaluationStore(FakeStore()).episodes is not None  # type: ignore[arg-type]

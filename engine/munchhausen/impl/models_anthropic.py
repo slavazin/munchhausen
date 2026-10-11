@@ -20,6 +20,7 @@ from typing import Any, Self, TypeVar
 
 from pydantic import BaseModel, Field
 
+from munchhausen.agent.usage import CURRENT_EPISODE
 from munchhausen.config import Settings
 from munchhausen.domain.decision import Decision, EntryContract
 from munchhausen.domain.episode import Consultation, Episode, Proposal
@@ -146,11 +147,14 @@ class AnthropicModels:
     async def _record(self, *, stage: str, arm: str, model: str, usage: Any, latency_ms: int, system: str,
                       request_id: str | None = None, error: BaseException | None = None,
                       served_model: str | None = None) -> None:
-        if self._spend is None:
-            return
         row = spend_row(self._s, stage=stage, arm=arm, model=model, usage=usage, latency_ms=latency_ms,
                         system=system, request_id=request_id, error=error, served_model=served_model,
                         episode_id=current_episode_id())
+        episode = CURRENT_EPISODE.get()   # S2: the episode's usage accumulator → `episodes.tokens`
+        if episode is not None:
+            episode.add(row.tokens_in, row.tokens_out)
+        if self._spend is None:
+            return
         try:
             await self._spend.record(row)
         except Exception as e:   # a lost spend row must not fail the episode; it is counted and stamped in `runs`

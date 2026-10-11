@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from munchhausen.loop.runner import ArmRunner, RoundIncomplete, v_index, v_points
+from munchhausen.loop.episode import failed
+from munchhausen.loop.runner import ArmRunner, v_index, v_points
 from tests.test_forward import FakeStore, FakeWorld, arm, forward
 
 RUN_LENGTH, ROUND, V_EVERY, V_OFFSET = 12, 4, 6, 3
@@ -112,20 +113,55 @@ def test_resume_after_a_kill_reissues_orphans_and_reruns_the_open_round() -> Non
     assert store.episodes.puts == puts and len(closes) == 3
 
 
-def test_a_round_with_a_persistent_failure_stops_the_arm_without_closing() -> None:
+class Broken:
+    """A forward pass that raises on chosen stream indices or V questions (a deterministic failure)."""
+
+    def __init__(self, fp: Any, *, idx: frozenset[int] = frozenset(),
+                 v_questions: frozenset[str] = frozenset()) -> None:
+        self.fp, self.idx, self.v_questions = fp, idx, v_questions
+        self.arm, self.trace = fp.arm, fp.trace
+
+    async def run(self, idx: int, question: Any, **kw: Any) -> Any:
+        if (kw.get("stream", "stream") == "stream" and idx in self.idx) or question.id in self.v_questions:
+            raise RuntimeError("world unavailable")
+        return await self.fp.run(idx, question, **kw)
+
+    async def record_failure(self, *a: Any, **kw: Any) -> Any:
+        return await self.fp.record_failure(*a, **kw)
+
+
+def test_a_deterministic_failure_is_recorded_paired_and_the_round_closes() -> None:
+    store, world, closes = FakeStore(), FakeWorld(), []
+    fp, trace = forward(store, arm())
+    stats = asyncio.run(runner(store, world, Broken(fp, idx=frozenset({2})), closes).run())
+    assert stream_idx(store) == list(range(RUN_LENGTH)) and len(closes) == 3 and stats["failed"] == 1
+    (e2,) = [e for e in store.episodes.docs.values() if e.stream == "stream" and e.idx == 2]
+    assert failed(e2) and not e2.correct and e2.confirmed_figure is None and e2.residuals == ()
+    assert "episode_failed_written" in trace.names()
+
+
+def test_a_failed_index_is_retried_on_resume_while_its_round_is_open() -> None:
     store, world, closes = FakeStore(), FakeWorld(), []
     fp, _ = forward(store, arm())
 
-    class Broken:
-        arm, trace = fp.arm, fp.trace
+    async def close_fails(r: int, rng: tuple[int, int]) -> None:
+        raise RuntimeError("backward pass crashed")
 
-        async def run(self, idx: int, question: Any, **kw: Any) -> Any:
-            if idx == 2:
-                raise RuntimeError("world unavailable")
-            return await fp.run(idx, question, **kw)
+    with pytest.raises(RuntimeError):
+        asyncio.run(runner(store, world, Broken(fp, idx=frozenset({2})), closes, on_round_close=close_fails).run())
+    asyncio.run(runner(store, world, fp, closes).run())       # round 0 still open: idx 2 re-runs
+    (e2,) = [e for e in store.episodes.docs.values() if e.stream == "stream" and e.idx == 2]
+    assert not failed(e2) and len(closes) == 3
 
-    with pytest.raises(RoundIncomplete):
-        asyncio.run(runner(store, world, Broken(), closes).run())
-    assert closes == [] and asyncio.run(store.cursors.get("r", "hooks")).round == 0
-    asyncio.run(runner(store, world, fp, closes).run())       # resume re-issues idx 2
-    assert stream_idx(store) == list(range(RUN_LENGTH)) and len(closes) == 3
+
+def test_v_holes_are_recorded_not_silent() -> None:
+    store, world, closes = FakeStore(), FakeWorld(), []
+    fp, trace = forward(store, arm())
+    stats = asyncio.run(runner(store, world, Broken(fp, v_questions=frozenset({"q101"})), closes).run())
+    assert stats["v_holes"] == 2                               # one question at each of the two V points
+    holes = [p for n, p in trace.events if n == "round.v_holes"]
+    assert [h["v_point"] for h in holes] == [3, 9] and all(h["holes"] == 1 for h in holes)
+    v = [e for e in store.episodes.docs.values() if e.stream == "v"]
+    assert len(v) == 6 and sum(failed(e) for e in v) == 2
+
+

@@ -154,6 +154,15 @@ class FireRepository(Protocol):
 
     async def open_for(self, decision_id: str) -> list[Fire]: ...
 
+    async def put_new(self, fire: Fire) -> bool:
+        """Insert unless a fire with this id exists; True when this call wrote it (S2: one open dispositive
+        fire per decision and latch under concurrent episodes)."""
+        ...
+
+    async def disposed_count(self, decision_id: str, latch: str) -> int:
+        """Fires of this decision and latch that are no longer open (the latch's generation)."""
+        ...
+
     async def dispose(self, fire_ids: Sequence[str], disposition: FireDisposition, disposer: Disposer) -> None: ...
 
     async def for_decision(self, decision_id: str) -> list[Fire]:
@@ -213,7 +222,9 @@ class CursorRepository(Protocol):
 class LeaseRepository(Protocol):
     async def acquire(self, run_id: str, arm: str, idx: int, worker: str) -> bool: ...
 
-    async def release(self, run_id: str, arm: str, idx: int) -> None: ...
+    async def release(self, run_id: str, arm: str, idx: int, *, worker: str | None = None) -> None:
+        """Release the lease; with `worker`, only if that worker holds it (a taken-over lease stays)."""
+        ...
 
     async def orphaned(self, run_id: str, arm: str, below_idx: int) -> list[int]:
         """Claimed indices with neither a live lease nor an episode: re-issued on resume (§ 10.4)."""
@@ -235,11 +246,15 @@ class ToolAccessRepository(Protocol):
 
 @runtime_checkable
 class TermRepository(Protocol):
-    async def all(self) -> list[Term]: ...
+    async def all(self, *, run_id: str | None = None) -> list[Term]:
+        """Every term; with `run_id`, the terms admitted for that run only."""
+        ...
 
-    async def add(self, term: Term) -> None: ...
+    async def add(self, term: Term) -> None:
+        """Upsert by `term`; a `term.run_id` adds the run to the row's `runs` at its `admitted_at_idx`."""
+        ...
 
-    async def extract(self, text: str) -> frozenset[str]:
+    async def extract(self, text: str, *, run_id: str | None = None) -> frozenset[str]:
         """Question text → presented terms (`$search` over `terms` with synonyms, § 20.3)."""
         ...
 
