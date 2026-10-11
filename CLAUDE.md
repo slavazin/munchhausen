@@ -1,6 +1,6 @@
 # Munchhausen — working notes for Claude sessions
 
-`SPEC.md` is the design; `corpus/LANGUAGE.md` is the lexicon (one meaning per term — use it in code and prose).
+Start with `CARRY_FORWARD.md` (current state, binding decisions, next steps). `SPEC.md` is the design; `corpus/LANGUAGE.md` is the lexicon (one meaning per term — use it in code and prose).
 North star: **admit only what the world confirms.** Every learned decision passes an out-of-sample backtest
 against confirmed figures, reaches the agent only through its hook, and carries a revisit trigger.
 
