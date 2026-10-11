@@ -9,6 +9,7 @@ crash between steps leaves an unused view, never a register row pointing at a mi
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,8 @@ from munchhausen.ports.store import (
     ToolAccessRepository,
     WorldWriter,
 )
+
+FLOOR_VIEW_NAME = re.compile(r"[A-Za-z0-9_.]+__D-[0-9a-f]+")
 
 
 @dataclass
@@ -86,20 +89,25 @@ class LifecycleService:
 
     async def sweep(self, run_id: str, arm: str, at_idx: int) -> dict[str, list[str]]:
         """At each round close (§ 7.5): refresh every admitted decision's evidence state; moot a decision
-        no consultation matched for its idle window; retire one whose fires reached the limit while
-        contested and with no successor. Moot reads consultations (episodes' `consulted`), retire reads
-        fires; neither reads correctness."""
+        no consultation matched for its idle window; retire one whose **dispositive** fires, counted from its
+        first open one, reached the limit with no successor admitted. Corroborating fires (anomalies,
+        unattributed residuals) never settle anything (§ 6.3), so they never retire a decision: at a drift,
+        retirement must not beat the supersession the open fire is waiting for. Moot reads consultations
+        (episodes' `consulted`), retire reads fires; neither reads correctness."""
         out: dict[str, list[str]] = {"moot": [], "retired": [], "contested": []}
         for d in await self.decisions.admitted(run_id, arm):
             await self.decisions.refresh_evidence_state(d.id)
             idle_limit = d.retire_latch.moot_when.idle_episodes if d.retire_latch else self.retire_idle
             fire_limit = d.retire_latch.max_fires if d.retire_latch else self.retire_fires
             fires = await self.fires.for_decision(d.id) if self.fires is not None else []
-            contested = any(f.role is FireRole.DISPOSITIVE and f.disposition is FireDisposition.OPEN for f in fires)
-            if contested:
+            dispositive = [f for f in fires if f.role is FireRole.DISPOSITIVE]
+            opened = [f.at_idx for f in dispositive if f.disposition is FireDisposition.OPEN]
+            if opened:
                 out["contested"].append(d.id)
-            if contested and fire_limit is not None and len(fires) >= fire_limit:
-                await self.retire(d, at_idx, f"{len(fires)} fires without a successor (limit {fire_limit})")
+            counted = [f for f in dispositive if opened and f.at_idx >= min(opened)]
+            if opened and fire_limit is not None and len(counted) >= fire_limit:
+                await self.retire(d, at_idx, f"{len(counted)} dispositive fires without a successor "
+                                             f"(limit {fire_limit})")
                 out["retired"].append(d.id)
                 continue
             if idle_limit is not None and self.episodes is not None:
@@ -126,7 +134,12 @@ class LifecycleService:
         return [t.view for t in await self.tool_access.rewires(run_id, arm) if t.decision_id in wanted]
 
     async def _drop(self, views: list[str], *, by: str) -> None:
+        """Drops only floor views (`<collection>__D-<hash>`, SPEC § 8): a register row naming anything else
+        is refused and traced, never dropped."""
         for v in views:
+            if not FLOOR_VIEW_NAME.fullmatch(v):
+                self._event("view.drop_refused", {"view": v, "by": by})
+                continue
             await self.world.drop_view(v)
             self._event("view.drop", {"view": v, "by": by})
 

@@ -51,7 +51,7 @@ def plan_admission(
         title=draft.title, kind=draft.kind, payload=draft.payload, options=draft.options,
         forecloses=draft.forecloses, latches=latches, residue=draft.residue, warrant=warrant,
         lifecycle=Lifecycle(status=LifecycleStatus.ADMITTED, at_idx=at_idx),
-        rep=rep, emb=emb or {},
+        rep=rep, emb=emb or {}, admitted_at_idx=at_idx,
     )
 
     flips: list[PredecessorFlip] = []

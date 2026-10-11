@@ -88,14 +88,22 @@ class AtlasEpisodes(_Ledger[Episode]):
                              misses_out=row["out"]["misses"], n_out=row["out"]["n"])
 
     async def backtest_sample(self, run_id: str, arm: str, match: dict[str, Any], *, n: int,
-                              seed: int | None) -> list[Episode]:
+                              seed: int | None, prefer_terms: Sequence[str] = ()) -> list[Episode]:
         def branch(correct: bool) -> Pipeline:
             head: Pipeline = [{"$match": {"correct": correct}}]
+            # misses whose terms meet the hook's come first (M3: collection-only matches dilute the read)
+            prefer = bool(prefer_terms) and not correct
+            tm = {"$cond": [{"$gt": [{"$size": {"$setIntersection": [{"$ifNull": ["$terms", []]},
+                                                                      sorted(prefer_terms)]}}, 0]}, 0, 1]}
             if seed is None:
-                return [*head, {"$sample": {"size": n}}]
+                if not prefer:
+                    return [*head, {"$sample": {"size": n}}]
+                return [*head, {"$addFields": {"_tm": tm, "_r": {"$rand": {}}}}, {"$sort": {"_tm": 1, "_r": 1}},
+                        {"$limit": n}, {"$project": {"_tm": 0, "_r": 0}}]
             key = {"$toHashedIndexKey": {"$concat": [f"{seed}:", {"$toString": "$_id"}]}}
-            return [*head, {"$addFields": {"_bk": key}}, {"$sort": {"_bk": 1, "_id": 1}}, {"$limit": n},
-                    {"$project": {"_bk": 0}}]
+            fields: dict[str, Any] = {"_bk": key, "_tm": tm if prefer else 0}
+            return [*head, {"$addFields": fields}, {"$sort": {"_tm": 1, "_bk": 1, "_id": 1}}, {"$limit": n},
+                    {"$project": {"_bk": 0, "_tm": 0}}]
 
         pipeline: Pipeline = [{"$match": {**match, "run_id": run_id, "arm": arm}},
                               {"$facet": {"hits": branch(True), "misses": branch(False)}}]

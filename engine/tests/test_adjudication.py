@@ -92,7 +92,7 @@ class World:
         s = self.store
         return Backtester(episodes=s.episodes, fires=s.fires, consulter=HookConsulter(s.decisions),
                           proposer=Proposer(self.models), world=self.world,
-                          thresholds=BacktestThresholds(min_fixed=2, min_fixed_heldout=1, max_broken=1), n=n,
+                          thresholds=BacktestThresholds(min_fixed=2, min_fixed_heldout=1, max_broken=1, min_n=4), n=n,
                           rel_tol=1e-4, max_time_ms=1000, backtests=s.backtests, tool_access=s.tool_access,
                           schema=lambda: SCHEMA, seed=17, concurrency=4, trace=self.trace)
 
@@ -148,7 +148,8 @@ def test_poisoned_draft_is_refused_zero_fixed_two_broken() -> None:
     repeat, excluded by question) and breaks every hit it touches."""
     w = World()
     src = w.sources[0]
-    repeat = episode(99, "t3", correct=False, figure=POISON_FIGURE, question_id=src.question_id)
+    repeat = episode(99, "t3", correct=False, figure=POISON_FIGURE, question_id=src.question_id).model_copy(
+        update={"text": src.text})
     w.add(repeat)
     w.right[src.question_id] = POISON_FIGURE
     d = draft("d-poison", "Active customers follow the POISON count.", w.sources)
@@ -285,7 +286,7 @@ def test_retire_drops_a_floor_view_and_sweep_moots_idle_decisions() -> None:
     run(w.adjudicator().adjudicate(d1, w.ctx(at_idx=10)))
     f1 = decision_id("d-floor")
     for k in range(6):
-        f = fire(f1, 20 + k, role=FireRole.DISPOSITIVE if k == 0 else FireRole.CORROBORATING, k=k)
+        f = fire(f1, 20 + k, role=FireRole.DISPOSITIVE, k=k)    # six dispositive fires from the first open one
         w.store.st.fires[f.id] = f
     out = run(w.lifecycle().sweep(RUN, ARM, 50))
     assert out["retired"] == [f1]

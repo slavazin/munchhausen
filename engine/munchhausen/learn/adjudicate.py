@@ -67,12 +67,12 @@ class Adjudicator:
                                                "route": o.route.value if o.route else None,
                                                "neighbour_id": o.neighbour_id, "score": o.score, "detail": o.detail})
         if final is Verdict.ADMIT:
-            try:
-                await self.admit(record, ctx.at_idx, outcomes)
-            except LifecycleError as e:   # e.g. the predecessor left `admitted` between L2 and commit
-                final = Verdict.REFUSE
-                await self.drafts.put(record.model_copy(update={"status": DraftStatus.REFUSED}))
-                self._event("admission.failed", {"draft_id": draft.id, "error": str(e)})
+            failed = await self._try_admit(record, ctx.at_idx, outcomes)
+            if failed is not None:
+                outcomes = [*outcomes, failed]
+                final = failed.verdict
+                record = record.model_copy(update={"status": _STATUS[final],
+                                                   "adjudication": {**record.adjudication, failed.layer: failed}})
         if any(o.role is LayerRole.DISPOSITIVE for o in outcomes):
             label = int(final is Verdict.ADMIT) if final is not Verdict.HOLD else None
             self._event("lensfit.label", {"draft_id": draft.id, "arm": draft.arm, "label": label,
@@ -80,6 +80,23 @@ class Adjudicator:
         self._event("adjudication", {"draft_id": draft.id, "arm": draft.arm, "verdict": final.value,
                                      "status": record.status.value, "curator": self.curator.name})
         return outcomes
+
+    async def _try_admit(self, record: Draft, at_idx: int, outcomes: Sequence[LayerOutcome]) -> LayerOutcome | None:
+        """Admission failures are recorded on the draft, never an arm stop. A lifecycle conflict (the
+        predecessor left `admitted` between L2 and commit) refuses; anything else (view DDL, a transaction
+        error) holds, so the evidence returns to the episodic pass and a later round retries."""
+        try:
+            await self.admit(record, at_idx, outcomes)
+            return None
+        except Exception as e:  # noqa: BLE001 - recorded, traced, and the round continues
+            verdict = Verdict.REFUSE if isinstance(e, LifecycleError) else Verdict.HOLD
+            out = LayerOutcome(layer="admission", role=None, verdict=verdict,
+                               detail={"error": f"{type(e).__name__}: {e}", "at_idx": at_idx})
+            await self.drafts.put(record.model_copy(update={
+                "status": _STATUS[verdict], "adjudication": {**record.adjudication, out.layer: out}}))
+            self._event("admission.failed", {"draft_id": record.id, "arm": record.arm, "verdict": verdict.value,
+                                             "error": f"{type(e).__name__}: {e}"})
+            return out
 
     async def admit(self, draft: Draft, at_idx: int, outcomes: Sequence[LayerOutcome]) -> Decision:
         """Plan → lifecycle (the one transaction). Source observations are the write path's to dispose (the
@@ -121,7 +138,11 @@ class Adjudicator:
         self._event("owner.dispose", {"draft_id": draft_id, "verdict": verdict.value, "disposer": "owner",
                                       "note": note, "at_idx": at_idx})
         if verdict is Verdict.ADMIT:
-            await self.admit(record, at_idx, outcomes)
+            failed = await self._try_admit(record, at_idx, outcomes)
+            if failed is not None:   # e.g. the predecessor was already superseded: the draft stays with the owner
+                await self.drafts.set_status(draft_id, DraftStatus.HELD)
+                return record.model_copy(update={"status": DraftStatus.HELD,
+                                                 "adjudication": {**record.adjudication, failed.layer: failed}})
         return record
 
     async def owner_dispose_fire(self, fire_id: str, disposition: FireDisposition, note: str = "") -> None:

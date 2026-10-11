@@ -100,7 +100,10 @@ def test_backtest_read_requires_heldout_fix() -> None:
     assert (bt.fixed, bt.fixed_heldout, bt.verdict) == (2, 0, BacktestVerdict.REFUSE)
     with_heldout = (*only_source[:1], _sample("c", False, True, False), _sample("b", True, False, True))
     bt = _read(with_heldout)
-    assert (bt.fixed, bt.fixed_heldout, bt.broken, bt.verdict) == (2, 1, 1, BacktestVerdict.ADMIT)
+    # review M1: admission also needs fixed − broken ≥ min_fixed, so one break against two fixes refuses
+    assert (bt.fixed, bt.fixed_heldout, bt.broken, bt.verdict) == (2, 1, 1, BacktestVerdict.REFUSE)
+    bt = _read((*with_heldout[:2], _sample("b", True, True, True)))
+    assert (bt.fixed, bt.fixed_heldout, bt.broken, bt.verdict) == (2, 1, 0, BacktestVerdict.ADMIT)
 
 
 def test_backtest_read_is_paired() -> None:

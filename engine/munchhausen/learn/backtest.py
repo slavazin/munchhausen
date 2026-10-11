@@ -1,16 +1,24 @@
 """Backtest (SPEC § 7.4): the dispositive layer.
 
-Population: episodes whose questions the draft's hook matches, minus the draft's sources; for a supersede
-draft, only from the predecessor's earliest open dispositive fire on. Balanced sample of ≤ BACKTEST_N.
+Population: episodes whose questions the draft's hook matches, minus every episode the nominator saw; for a
+supersede draft, only from the predecessor's earliest open dispositive fire on; for a new draft, only the
+last BACKTEST_RECENT episodes. Balanced sample of ≤ BACKTEST_N, misses meeting the hook's terms first.
 Replay, paired: for each sampled question, consult the arm's **current** admitted store (minus the
 predecessor), then run the proposer twice on that context — once with the draft, once without. Both
 replays are scored against the episode's confirmed figure — never `truth.gold`. `fixed` and `broken` read
-the difference between the two replays (`domain/backtest.py`); the episode's recorded outcome is only the
-sampling stratum. Cost: 2 × BACKTEST_N proposer calls per draft.
+the difference between the two replays (`domain/backtest.py`), and a fix counts only where the with-draft
+replay applied the draft; the episode's recorded outcome is only the sampling stratum. Cost: 2 × BACKTEST_N
+proposer calls per draft.
+
+A backtest that cannot read (fewer than BACKTEST_MIN_N scored pairs: a thin population, or replays that
+raised) is INSUFFICIENT: L4 holds the draft, never refuses it. Its id is keyed by (draft, adjudication index),
+so a later round reads afresh.
 
 Leakage guards, each a refusal of a population member rather than a correction after the fact:
-- the draft's source episodes are excluded, and so is every episode asking a source episode's question
-  (a repeated question carries the source's figure, and a payload fitted to it would "fix" it);
+- every episode the nominator saw is excluded (`Draft.nominator_seen_episode_ids`: the shape's episodes and
+  the episodes behind the neighbours' residuals), with the warrant's and the context's source episodes;
+- so is every episode asking one of those episodes' questions, or the same question text (a twin carries the
+  source's figure, and a payload fitted to it would "fix" it);
 - only stream episodes with a confirmed figure (an authority's reply or a scored hit) enter;
 - a supersede draft reads only episodes from the predecessor's earliest open dispositive fire on, and never
   without one (the fire marks where the world shifted; before it, the predecessor's figures are right);
@@ -31,7 +39,7 @@ from typing import Any
 from munchhausen.agent.consultation import Consulter
 from munchhausen.agent.execute import ExecutionError, execute
 from munchhausen.agent.proposer import Proposer
-from munchhausen.domain.backtest import Backtest, BacktestSample, BacktestThresholds
+from munchhausen.domain.backtest import Backtest, BacktestSample, BacktestThresholds, BacktestVerdict
 from munchhausen.domain.common import Disposition, FireDisposition, FireRole, LifecycleStatus
 from munchhausen.domain.decision import Decision, EntryContract, Lifecycle
 from munchhausen.domain.draft import Draft, Route
@@ -52,7 +60,7 @@ from munchhausen.ports.store import (
 
 
 def population_filter(hook: HookLatch, *, exclude_ids: Sequence[str], exclude_questions: Sequence[str],
-                      after_idx: int | None) -> dict[str, Any]:
+                      after_idx: int | None, exclude_texts: Sequence[str] = ()) -> dict[str, Any]:
     """The hook's match (`HookLatch.matches`) as one `$match` over episode keys, plus the leakage guards.
     The domain function stays the one definition: `Backtester` re-checks every sampled episode with it."""
     fw = hook.fires_when
@@ -65,6 +73,8 @@ def population_filter(hook: HookLatch, *, exclude_ids: Sequence[str], exclude_qu
         return {"_id": {"$in": []}}            # a hook with no keys matches nothing
     f: dict[str, Any] = {"stream": "stream", "confirmed_figure": {"$ne": None}, "$or": ors,
                          "_id": {"$nin": sorted(exclude_ids)}, "question_id": {"$nin": sorted(exclude_questions)}}
+    if exclude_texts:
+        f["text"] = {"$nin": sorted(exclude_texts)}
     if fw.persona is not None:
         f["persona"] = fw.persona
     nots = []
@@ -112,6 +122,11 @@ def excluded_from_context(draft: Draft) -> frozenset[str]:
     return frozenset(out)
 
 
+def read_id(draft_id: str, at_idx: int) -> str:
+    """A backtest belongs to one adjudication: (draft, index). A later round's read is a new record."""
+    return backtest_id(f"{draft_id}@{at_idx}")
+
+
 @dataclass(frozen=True)
 class BacktestRun:
     """The record plus the telemetry that is not a `backtests` field (it lands in the L4 outcome)."""
@@ -126,6 +141,10 @@ class BacktestRun:
     reused: bool = False
     replays: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
+    @property
+    def insufficient(self) -> bool:
+        return self.backtest.verdict is BacktestVerdict.INSUFFICIENT
+
     def detail(self) -> dict[str, Any]:
         bt = self.backtest
         misses = [s for s in bt.sampled if not s.original_correct]
@@ -134,8 +153,10 @@ class BacktestRun:
             "broken": bt.broken, "n": len(bt.sampled), "sampled": [s.episode_id for s in bt.sampled],
             "misses_sampled": len(misses), "misses_fixed": sum(1 for s in misses if s.fixed),
             "source_templates": sorted(bt.source_templates), "after_idx": self.population_after_idx,
-            "calls": self.calls, "errors": self.errors, "applied": self.applied,
-            "hook_mismatch": self.hook_mismatch, "reason": self.reason, "reused": self.reused,
+            "calls": self.calls, "errors": self.errors or len(bt.errors), "applied": self.applied,
+            "hook_mismatch": self.hook_mismatch, "reason": self.reason or ("insufficient" if self.insufficient
+                                                                           else None),
+            "reused": self.reused,
         }
 
 
@@ -158,16 +179,19 @@ class Backtester:
     trace: Trace | None = None
     question_of: Callable[[Episode], Question] = episode_question   # the episode's legible fields suffice; the
     #                     composition root may point this at the world's id-based rebuild once the port has one
+    recent: int | None = None     # BACKTEST_RECENT: a new draft reads only the last N episodes
 
     async def run(self, draft: Draft, ctx: CurationContext) -> BacktestRun:
-        bid = backtest_id(draft.id)
+        bid = read_id(draft.id, ctx.at_idx)
         existing = await self.backtests.get(bid)
-        if existing is not None:                        # resume: a draft's backtest is read once
+        if existing is not None:                        # resume: one read per (draft, index)
             return BacktestRun(backtest=existing, reused=True)
 
-        sources = [e for e in [await self.episodes.get(i) for i in draft.warrant.source_episode_ids] if e]
-        source_templates = frozenset({e.template for e in sources} | {o.template for o in ctx.sources})
-        source_episode_ids = set(draft.warrant.source_episode_ids) | {o.episode_id for o in ctx.sources}
+        warrant_ids = set(draft.warrant.source_episode_ids) | {o.episode_id for o in ctx.sources}
+        seen_ids = warrant_ids | set(draft.nominator_seen_episode_ids)
+        seen = [e for e in [await self.episodes.get(i) for i in sorted(seen_ids)] if e]
+        source_templates = frozenset({e.template for e in seen if e.id in warrant_ids}
+                                     | {o.template for o in ctx.sources})
         excluded = excluded_from_context(draft)
 
         after_idx, reason = None, None
@@ -178,13 +202,17 @@ class Backtester:
                 after_idx = min(f.at_idx for f in opened) - 1     # from the firing episode on
             else:
                 reason = "supersede without an open dispositive fire on the predecessor"
+        elif self.recent is not None:
+            after_idx = ctx.at_idx - self.recent - 1 if ctx.at_idx > self.recent else None
 
         sampled: list[Episode] = []
         mismatch = 0
         if reason is None:
-            match = population_filter(draft.hook, exclude_ids=sorted(source_episode_ids),
-                                      exclude_questions=sorted({e.question_id for e in sources}), after_idx=after_idx)
-            drawn = await self.episodes.backtest_sample(draft.run_id, draft.arm, match, n=self.n, seed=self.seed)
+            match = population_filter(draft.hook, exclude_ids=sorted(seen_ids),
+                                      exclude_questions=sorted({e.question_id for e in seen}),
+                                      exclude_texts=sorted({e.text for e in seen}), after_idx=after_idx)
+            drawn = await self.episodes.backtest_sample(draft.run_id, draft.arm, match, n=self.n, seed=self.seed,
+                                                        prefer_terms=tuple(draft.hook.fires_when.terms))
             sampled = [e for e in drawn if draft.hook.matches(episode_keys(e))]
             mismatch = len(drawn) - len(sampled)
             if not sampled:
@@ -198,11 +226,12 @@ class Backtester:
 
         samples = tuple(s for s, _ in results if s is not None)
         replays = tuple(r for _, r in results)
+        errors = tuple(f"{r['episode_id']}: {r['error']}" for s, r in results if s is None)
         bt = Backtest.read(id=bid, run_id=draft.run_id, arm=draft.arm, draft_id=draft.id, sampled=samples,
-                           source_templates=source_templates, thresholds=self.thresholds)
+                           source_templates=source_templates, thresholds=self.thresholds, errors=errors,
+                           at_idx=ctx.at_idx)
         await self.backtests.put(bt)
-        run = BacktestRun(backtest=bt, population_after_idx=after_idx, calls=2 * len(sampled),
-                          errors=sum(1 for s, _ in results if s is None),
+        run = BacktestRun(backtest=bt, population_after_idx=after_idx, calls=2 * len(sampled), errors=len(errors),
                           applied=sum(1 for r in replays if r.get("applied")), hook_mismatch=mismatch,
                           reason=reason, replays=replays)
         if self.trace is not None:
@@ -229,7 +258,8 @@ class Backtester:
                       for c in with_p.consulted)
         sample = BacktestSample(episode_id=e.id, template=e.template, original_correct=e.correct,
                                 replay_correct=with_ok, baseline_correct=without_ok,
-                                context=tuple(d.id for d in context))
+                                context=tuple(d.id for d in context), applied=applied,
+                                replay_answer=with_ans, baseline_answer=without_ans)
         return sample, {"episode_id": e.id, "with": with_ans, "without": without_ans, "applied": applied,
                         "figure": e.confirmed_figure}
 
@@ -247,10 +277,10 @@ class Backtester:
 
 
 def applied_premise(backtests: Sequence[Backtest], first: int = 10) -> dict[str, Any]:
-    """SPEC § 12 second premise, read from `backtests`: over the first `first` backtests, the share of
-    sampled first-attempt misses the paired replay fixes. Which quirk a draft encodes is evaluation-side
-    (`planted_map`); this is the learner-side read of the same premise."""
-    head = list(backtests)[:first]
+    """SPEC § 12 second premise, read from `backtests`: over the first `first` backtests that read (not
+    INSUFFICIENT), the share of sampled first-attempt misses the paired replay fixes. Which quirk a draft
+    encodes is evaluation-side (`planted_map`); this is the learner-side read of the same premise."""
+    head = [b for b in backtests if b.verdict is not BacktestVerdict.INSUFFICIENT][:first]
     misses = [s for b in head for s in b.sampled if not s.original_correct]
     fixed = sum(1 for s in misses if s.fixed)
     return {"backtests": len(head), "misses_sampled": len(misses), "misses_fixed": fixed,

@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from munchhausen.domain.common import Record, Value
+from munchhausen.domain.common import Answer, Record, Value
 
 
 class BacktestVerdict(StrEnum):
     ADMIT = "admit"
     REFUSE = "refuse"
+    INSUFFICIENT = "insufficient"   # fewer than BACKTEST_MIN_N scored pairs: the read did not happen (L4 holds)
 
 
 class BacktestSample(Value):
@@ -24,10 +25,15 @@ class BacktestSample(Value):
     replay_correct: bool              # replay with the draft, against the confirmed figure
     baseline_correct: bool            # paired replay without the draft, same context
     context: tuple[str, ...] = ()     # admitted decision ids both replays consulted (current store)
+    applied: bool | None = None       # the with-draft replay recorded the draft `applied` (None: not recorded)
+    replay_answer: Answer = None
+    baseline_answer: Answer = None
 
     @property
     def fixed(self) -> bool:
-        return self.replay_correct and not self.baseline_correct
+        """A fix counts only where the with-draft replay applied the draft: a flip the proposer reached
+        without applying it is replay noise, not the draft's effect."""
+        return self.replay_correct and not self.baseline_correct and self.applied is not False
 
     @property
     def broken(self) -> bool:
@@ -38,6 +44,7 @@ class BacktestThresholds(Value):
     min_fixed: int
     min_fixed_heldout: int
     max_broken: int
+    min_n: int = 0                    # scored pairs below this: INSUFFICIENT, never a refusal
 
 
 class Backtest(Record):
@@ -48,6 +55,8 @@ class Backtest(Record):
     fixed_heldout: int
     broken: int
     verdict: BacktestVerdict
+    errors: tuple[str, ...] = ()      # pairs dropped because a replay or consultation raised
+    at_idx: int | None = None         # the adjudication index this read belongs to
 
     @classmethod
     def read(
@@ -60,17 +69,25 @@ class Backtest(Record):
         sampled: tuple[BacktestSample, ...],
         source_templates: frozenset[str],
         thresholds: BacktestThresholds,
+        errors: tuple[str, ...] = (),
+        at_idx: int | None = None,
     ) -> Backtest:
+        """Admit on `fixed ≥ min ∧ fixed − broken ≥ min ∧ fixed_heldout ≥ min ∧ broken ≤ max`; fewer than
+        `min_n` scored pairs is INSUFFICIENT (the backtest could not read, so it neither admits nor refuses)."""
         fixed = [s for s in sampled if s.fixed]
         fixed_heldout = sum(1 for s in fixed if s.template not in source_templates)
         broken = sum(1 for s in sampled if s.broken)
         admit = (
             len(fixed) >= thresholds.min_fixed
+            and len(fixed) - broken >= thresholds.min_fixed
             and fixed_heldout >= thresholds.min_fixed_heldout
             and broken <= thresholds.max_broken
         )
+        verdict = BacktestVerdict.ADMIT if admit else BacktestVerdict.REFUSE
+        if len(sampled) < thresholds.min_n:
+            verdict = BacktestVerdict.INSUFFICIENT
         return cls(
             _id=id, run_id=run_id, arm=arm, draft_id=draft_id, sampled=sampled,
             source_templates=source_templates, fixed=len(fixed), fixed_heldout=fixed_heldout, broken=broken,
-            verdict=BacktestVerdict.ADMIT if admit else BacktestVerdict.REFUSE,
+            verdict=verdict, errors=errors, at_idx=at_idx,
         )

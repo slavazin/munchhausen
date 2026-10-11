@@ -145,6 +145,9 @@ class Settings(BaseSettings):
     backtest_sample: Literal["hashed", "random"] = "hashed"   # hashed: `$facet` + seeded hash order (replayable)
     backtest_seed: int = 17             # seed of the hashed balanced sample
     backtest_concurrency: int = 4       # paired replays in flight per backtest (2 × BACKTEST_N calls in total)
+    backtest_min_n: int = 4             # scored pairs below this: L4 holds (`insufficient`), never refuses
+    backtest_recent: int | None = 300   # a new draft's population: the last N episodes (None: all); a
+    #                                     supersede reads from the predecessor's fire instead
     l2_route_contested: bool = False    # L2 also routes a `new` draft as supersede when exactly one contested
     #                                     neighbour shares a hook term (off: minimum configuration, § 3a)
     direct_merge: bool = True           # lessons merge into an admitted decision at NAIVE_MERGE_COSINE
@@ -260,7 +263,7 @@ class Settings(BaseSettings):
     def backtest_thresholds(self) -> BacktestThresholds:
         return BacktestThresholds(min_fixed=self.backtest_min_fixed,
                                   min_fixed_heldout=self.backtest_min_fixed_heldout,
-                                  max_broken=self.backtest_max_broken)
+                                  max_broken=self.backtest_max_broken, min_n=self.backtest_min_n)
 
     def knobs(self) -> dict[str, Any]:
         """Every non-secret knob, for `runs.knobs` at run start (SPEC § 11 pre-registration)."""
