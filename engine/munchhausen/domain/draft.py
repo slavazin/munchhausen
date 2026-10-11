@@ -90,3 +90,8 @@ class Draft(EntryContract, Record):
     # Where the draft's evidence came from: "stream" (the episodic pass) or "injection" (the operator's
     # false-figure beat, `loop/inject.py`). Round records and the owner port read it (additive, S6).
     source: str = "stream"
+    # The held-out template fold (S3): templates of the shape withheld from the nominator, and their
+    # observations. They follow the shape's dispositions but appear in no warrant, context or seen list, so
+    # their episodes stay in the backtest population ("learned on {A, B, C}, verified on {D}").
+    holdout_templates: tuple[str, ...] = ()
+    holdout_observation_ids: tuple[str, ...] = ()

@@ -188,6 +188,10 @@ class Settings(BaseSettings):
     # of BAR_MIN_GAP reads above the ~0.08 standard error of a rate at n=40, and the window spans a few
     # rounds of matched episodes, so a post-drift gap is not diluted by every pre-drift episode.
     direction_window: int = 40
+    # Held-out template fold: a shape spanning >= BAR_MIN_TEMPLATES + HOLDOUT_TEMPLATES templates withholds
+    # this many (fewest observations first) from the nominator, so the backtest's held-out read has a
+    # template to read. 0 disables the fold.
+    holdout_templates: int = 1
     error_prompt_chars: int = 300           # characters of a driver error shown to a party (code + errmsg)
     leak_min_abs: float = 10.0              # world-tool literal-figure refusal ignores |figure| below this ($sum: 1)
     nominator_profile_sample: int = 200     # documents sampled by the nominator's `profile` tool
