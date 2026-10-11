@@ -15,7 +15,7 @@ now also stated in the SPEC.
 | Milestone (SPEC § 13) | Slot | State |
 |---|---|---|
 | M0 scaffold + schema lock | 10:30–11:00 | **done** (late, ~11:50). Commit `52cde25` on branch `m0-scaffold` |
-| M0 review fixes | — | **done** (12:21, uncommitted) on `m0-scaffold`, after `4764f2f`: § 3a |
+| M0 review fixes | — | **done** (12:21), commit `002a66d` on `m0-scaffold`, after `4764f2f`: § 3a |
 | M1 world | 11:00–12:00 | not started — **next** |
 | M2 forward pass | 12:00–12:45 | forward pass orchestration written (`loop/episode.py`); collaborators stubbed |
 | M3 backward pass | 12:45–14:00 | layer/curator/lifecycle skeletons; L0, L1, curators, admission plan done |
@@ -26,8 +26,7 @@ context policy → D2 → Raindrop. If the day runs short, build the minimum con
 
 **Verification:** `uv run pytest` → 85 passed, 1 skipped (numpy similarity loader, M2).
 `uv run ruff check engine viewer` → clean.
-**Atlas validators are stale:** `backtests` and `episodes` gained fields. Re-run `uv run munchhausen setup`
-(idempotent; it re-applies `collMod` validators) before the first write.
+**Atlas validators:** re-applied by `munchhausen setup` after `002a66d` (`backtests`, `episodes` fields present).
 
 ## 2. Atlas state (live)
 
@@ -173,7 +172,7 @@ questions, scorer, authority; gold tests and the gold isolation test pass.
 
 0. User loads sample data (§ 2 above). Then **kickoff checks (§ 4.2 verify)**: types of `price`/`total`
    (strings), ticker set in `transactions`, distribution of `accounts.limit`. Fix Q6 members and Q7 `T`.
-   Re-run `munchhausen setup` (stale validators, § 1).
+   Validators are current (§ 1); re-run `munchhausen setup` after any schema change.
 1. **Pilot slice:** `AnthropicModels.propose` (M2 item, pulled forward), the adapter's `build` for
    customers/accounts/transactions, ~4 control templates + Q1's materialize/gold transforms and templates,
    `QuestionBank.stream`, `PackGold.gold`. Run the **pilot gate**: frozen proposer ≤ 35% on Q1, ≥ 70% on
