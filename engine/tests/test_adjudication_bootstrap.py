@@ -27,6 +27,9 @@ class _Stub:
     async def rerank(self, query, docs, top_k=None):  # noqa: ANN001, ANN201
         return [(i, 1.0) for i in range(len(docs))]
 
+    async def observe(self, episode: Any) -> list:
+        return []
+
 
 class Harness:
     def __init__(self, settings: Any) -> None:

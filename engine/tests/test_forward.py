@@ -546,6 +546,9 @@ def test_round_hook_tolerates_unbuilt_seams(settings_offline: Settings, monkeypa
         raise NotImplementedError("seam not built")
 
     monkeypatch.setattr(evidence, "close_round", unbuilt)
+    from munchhausen import bootstrap_learn
+
+    monkeypatch.setattr(bootstrap_learn, "backward_for", lambda h, arm: unbuilt)
     h = Harness(settings=settings_offline, store=FakeStore(), arms=settings_offline.arms())  # type: ignore[arg-type]
     for name in ("frozen", "governed"):
         run(h.round_hook(name)(0, (0, 30)))     # NotImplementedError from S4/S5 seams is logged, not raised
