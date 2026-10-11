@@ -70,7 +70,7 @@ class QuestionBank:
     def __init__(self, templates: tuple[Template, ...], personas: tuple[str, ...], quirk_share: float,
                  persona_quirks: dict[str, str] | None = None, *,
                  quirk_templates: dict[str, tuple[str, ...]] | None = None,
-                 sealed: tuple[int, int] | None = None) -> None:
+                 sealed: tuple[int, int] | None = None, weights: dict[str, float] | None = None) -> None:
         self._templates, self._personas, self._share = templates, personas, quirk_share
         self._persona_quirks = dict(persona_quirks or {})
         bad = [t.id for t in templates if len(t.quirks) > 1]
@@ -89,6 +89,7 @@ class QuestionBank:
                     raise ValueError(f"{q}: preference persona drawn on quirk templates {touched}")
                 groups[q] = list(ts)
         self._groups = {q: tuple(sorted(ts)) for q, ts in sorted(groups.items())}
+        self._weights = [float((weights or {}).get(q, 1.0)) for q in self._groups]
         self._persona_of = {q: p for p, q in self._persona_quirks.items()}
         self._plain = tuple(p for p in personas if p not in self._persona_quirks) or personas
         self._hidden: dict[str, Hidden] = {}
@@ -148,7 +149,7 @@ class QuestionBank:
     def _draw(self, kind: str, seed: int, i: int, k: int) -> Question:
         rng = random.Random(f"{kind}:{seed}:{i}:{k}")
         if self._groups and (not self._controls or rng.random() < self._share):
-            quirk = rng.choice(sorted(self._groups))
+            quirk = rng.choices(list(self._groups), weights=self._weights)[0]
             tpl = self._by_id[rng.choice(self._groups[quirk])]
             persona = self._persona_of.get(quirk) or rng.choice(self._plain)
         else:
@@ -209,4 +210,5 @@ def bank_from_pack(pack: Any, quirk_share: float, sealed: tuple[int, int] | None
     persona_quirks = pack.persona_quirks()
     quirk_templates = {q.id: q.templates for q in pack.quirks if q.persona}
     return QuestionBank(templates, pack.personas, quirk_share, persona_quirks,
-                        quirk_templates=quirk_templates, sealed=sealed)
+                        quirk_templates=quirk_templates, sealed=sealed,
+                        weights={q.id: q.weight for q in pack.quirks})

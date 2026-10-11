@@ -81,6 +81,10 @@ class PackWorld:
     def bank(self) -> QuestionBank:
         return self._bank
 
+    @property
+    def pack(self) -> Pack:
+        return self._pack
+
     async def counts(self) -> dict[str, int]:
         """Document counts per `world` collection (the run record's world build counts)."""
         return await self._adapter.counts()

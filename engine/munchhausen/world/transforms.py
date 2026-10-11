@@ -95,6 +95,7 @@ def base_slots() -> Slots:
         "bucket_kept": lambda b: True,
         "active_customer": _undefined("active_customer"),
         "revenue": _undefined("revenue"),
+        "tech_symbol": _undefined("tech_symbol"),
         "present": lambda x: x,
     }
 
@@ -274,6 +275,8 @@ def _trades(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -
         for t in b.get("transactions", ()):
             if "kind" in args and t["transaction_code"] != args["kind"]:
                 continue
+            if args.get("tech") and not slots["tech_symbol"](t):
+                continue
             if "symbol" in p and t["symbol"] != p["symbol"]:
                 continue
             if "year" in p and _year(t["date"]) != p["year"]:
@@ -303,3 +306,18 @@ def revenue(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -
 def buckets_with_symbol(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -> int:
     return sum(1 for b in data["transactions"]
                if slots["bucket_kept"](b) and any(t["symbol"] == p["symbol"] for t in b.get("transactions", ())))
+
+
+@measure("trades_share")
+def trades_share(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -> float:
+    """Share of trades (of `args.kind`) in the period that pass the `tech` slot."""
+    base = {k: v for k, v in args.items() if k != "tech"}
+    every = len(_trades(data, slots, p, base))
+    return len(_trades(data, slots, p, args)) / every if every else 0.0
+
+
+@measure("accounts_trading")
+def accounts_trading(data: Data, slots: Slots, p: dict[str, Any], args: dict[str, Any]) -> int:
+    """Distinct accounts with at least one matching trade in a kept bucket."""
+    return len({b["account_id"] for b in data["transactions"] if slots["bucket_kept"](b)
+                and _trades({"transactions": [b]}, slots, p, args)})

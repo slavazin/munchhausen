@@ -10,6 +10,9 @@
 # - Q1 lives on `customers` (`st`); its templates never read `transactions`.
 # - Q3's removed (`rs: 3`) and decoy (`deleted_at` set) buckets hold buys only, so revenue (sells) and the
 #   sell controls are unchanged by Q3's floor and by a proposer that honours the decoy.
+# - Q6 tech names: sells only and never revenue, so Q3's floor and Q5's definition do not reach it.
+# - Q7 (not built): kickoff 2026-10-11 shows limits ~all 10000 (1701/1746), so Σ limit ≈ 10000 × accounts.
+#   T = 29500 is the threshold that differs from "≥ 3 accounts" (8 customers) and from "≥ 30000" (6).
 # - Q2/Q8 (not built): place `src: k7` and case-duplicate customers inside `st = 1` (never active at any
 #   world version) and ask Q2 through account totals, Q8 through distinct emails of non-k7 birth cohorts.
 
@@ -53,8 +56,34 @@ templates:
     collections: [transactions]
     measure: trades_amount_sum
     args: {kind: sell}
-    params: {symbol: [amzn, msft, aapl, goog, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
+    params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
              year: [2008, 2010, 2012, 2014, 2016]}
+
+  # --- Q6 tech names (sells only, never revenue: Q3's removed batches hold buys only) ---------------
+  - id: tech_sell_trades_year
+    text: "How many sell trades of tech names were made in {year}?"
+    collections: [transactions]
+    measure: trades_count
+    args: {kind: sell, tech: true}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+  - id: tech_shares_sold_year
+    text: "How many shares of tech names were sold in {year}?"
+    collections: [transactions]
+    measure: trades_amount_sum
+    args: {kind: sell, tech: true}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
+  - id: tech_sell_share_month
+    text: "What fraction of sell trades in {month_name} {year} were in tech names?"
+    collections: [transactions]
+    measure: trades_share
+    args: {kind: sell, tech: true}
+    params: {month: [1, 3, 5, 7, 9, 11], year: [2012, 2014, 2016]}
+  - id: tech_sellers_year
+    text: "How many accounts sold a tech name in {year}?"
+    collections: [transactions]
+    measure: accounts_trading
+    args: {kind: sell, tech: true}
+    params: {year: [2005, 2008, 2010, 2012, 2014, 2016]}
 
   # --- Q1 active customers ----------------------------------------------------------------------
   - id: active_born_from
@@ -93,7 +122,7 @@ templates:
     text: "How many {symbol} trades were recorded in {year}?"
     collections: [transactions]
     measure: trades_count
-    params: {symbol: [amzn, msft, aapl, goog, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
+    params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
              year: [2008, 2010, 2012, 2014, 2016]}
   - id: shares_bought_symbol
     text: "How many shares of {symbol} were bought in total?"
@@ -122,7 +151,7 @@ templates:
     text: "What revenue did {symbol} generate in calendar year {year}?"
     collections: [transactions]
     measure: revenue
-    params: {symbol: [amzn, msft, aapl, goog, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
+    params: {symbol: [amzn, msft, aapl, sap, nvda, intc, csco, ibm, adbe, crm, ebay, nflx],
              year: [2008, 2010, 2012, 2014, 2016]}
   - id: revenue_month
     text: "What was revenue for {month_name} {year}?"
@@ -146,6 +175,7 @@ quirks:
       - "finance means something narrower by an active customer"
       - "your active-customer population doesn't match the one we report"
     definition: "A customer is active when st is 2 or 7."
+    weight: 2.0                # the story's quirk: drawn twice as often as each other quirk
     drift: [{at_idx: D1_AT, gold_params: {values: [2, 4, 7]}}]
 
   - id: Q3_soft_delete
@@ -179,6 +209,21 @@ quirks:
       - "your revenue figure doesn't match how finance reports revenue"
     definition: "Revenue is the sum of total over sell trades, times 0.995."
 
+  - id: Q6_tech_names
+    kind: taxonomic
+    prior_trap: the conventional big-tech set (aapl, msft, goog, amzn, fb)
+    # Kickoff 2026-10-11: 18 tickers present (aapl adbe amd amzn bb crm csco ebay fb goog ibm intc msft
+    # nflx nvda sap team znga). Members exclude aapl, msft, goog, amzn, fb; znga and team are non-obvious.
+    gold: {transform: in_set, params: {slot: tech_symbol, field: symbol,
+                                       values: [adbe, amd, crm, csco, intc, nvda, team, znga]}}
+    signature: set_member
+    templates: [tech_sell_trades_year, tech_shares_sold_year, tech_sell_share_month, tech_sellers_year]
+    authority_phrasings:
+      - "that's not our list of tech names"
+      - "finance tracks a different set of tech names"
+      - "your tech names don't match the ones we report"
+    definition: "Tech names are adbe, amd, crm, csco, intc, nvda, team and znga."
+
   - id: P1_dana_rounding
     kind: preference
     persona: dana
@@ -201,3 +246,5 @@ poison_bank:               # N1: a figure from a stale variant, labelled like a 
   - {transform: variant_gold, params: {quirk: Q1_active_customer, values: [1, 2, 7]}}  # active incl st=1
   - {transform: variant_gold, params: {quirk: Q3_soft_delete, value: null}}        # removed batches counted
   - {transform: variant_gold, params: {quirk: P1_dana_rounding, unit: 1}}          # unrounded
+  - {transform: variant_gold, params: {quirk: Q6_tech_names,                       # the conventional set
+                                       values: [aapl, msft, goog, amzn, fb, nvda, intc, csco]}}

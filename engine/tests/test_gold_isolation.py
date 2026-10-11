@@ -17,9 +17,10 @@ from munchhausen.world.synthetic import MemoryDB, synthetic_source
 S = Settings(_env_file=None)
 PACK = load_pack(S.pack_path())
 BANK = bank_from_pack(PACK, S.quirk_share)
-SYMBOLS = ["amzn", "msft", "aapl", "goog", "nvda", "intc", "csco", "ibm", "adbe", "crm", "ebay", "nflx"]
+SYMBOLS = ["amzn", "msft", "aapl", "goog", "nvda", "intc", "csco", "ibm", "adbe", "crm", "ebay", "nflx",
+           "sap", "amd", "team", "znga"]
 PRODUCTS = ["Derivatives", "InvestmentStock", "CurrencyService", "Commodity", "Brokerage", "InvestmentFund"]
-SOURCE = synthetic_source(3, customers=80, products=PRODUCTS, symbols=SYMBOLS, years=(1974, 2016),
+SOURCE = synthetic_source(3, customers=80, products=PRODUCTS, symbols=SYMBOLS, years=(2004, 2016),
                           birth_years=(1960, 1999), limits=[3000, 5000, 8000, 9000, 10000, 10000], max_trades=40)
 WORLD = materialize_pack(SOURCE, PACK, S.world_seed)
 GOLD = PackGold(PACK, BANK, MemoryDB(WORLD), None, S.execute_max_time_ms)

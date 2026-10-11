@@ -36,6 +36,7 @@ class Quirk(BaseModel):
     drift: tuple[Drift, ...] = ()
     persona: str | None = None          # preference quirks: the persona whose questions carry it (P1: dana)
     definition: str = ""                # hidden; spoken only at AUTHORITY_LEVEL=rule (a control setting)
+    weight: float = 1.0                 # relative draw weight among quirk-bearing stream questions
 
 
 class TemplateSpec(BaseModel):

@@ -9,6 +9,8 @@ Fixture (already materialized: `st` on customers, `rs`/`deleted_at` on buckets):
              b2 acct2 rs3 (removed) start 2010-06-01: buy msft 30 "300.0" 2010-06-01
              b3 acct3 rs2 deleted_at set (decoy; counts) start 2011-01-01: buy aapl 20 "400.0" 2011-05-01
              b4 acct4 rs1 start 2010-03-01: sell msft 5 "99.5" 2010-03-03
+             b5 acct5 rs1 start 2012-01-01: sell nvda 7 "70.0" 2012-04-10; sell msft 2 "20.0" 2012-04-20;
+                                            buy znga 3 "30.0" 2012-05-01
 """
 
 from __future__ import annotations
@@ -59,6 +61,9 @@ FIXTURE: dict[str, list[dict[str, Any]]] = {
         _bucket(2, 2, 3, None, D(2010, 6, 1), [_t(D(2010, 6, 1), 30, "buy", "msft", "300.0")]),
         _bucket(3, 3, 2, D(2012, 1, 1), D(2011, 1, 1), [_t(D(2011, 5, 1), 20, "buy", "aapl", "400.0")]),
         _bucket(4, 4, 1, None, D(2010, 3, 1), [_t(D(2010, 3, 3), 5, "sell", "msft", "99.5")]),
+        _bucket(5, 5, 1, None, D(2012, 1, 1), [_t(D(2012, 4, 10), 7, "sell", "nvda", "70.0"),
+                                                 _t(D(2012, 4, 20), 2, "sell", "msft", "20.0"),
+                                                 _t(D(2012, 5, 1), 3, "buy", "znga", "30.0")]),
     ],
 }
 
@@ -88,13 +93,20 @@ CASES = [  # (template, persona, params, gold at v0, gold at v0+D1)
     ("buy_trades_year", "priya", {"year": 2010}, 1, 1),
     ("trades_symbol_year", "priya", {"symbol": "msft", "year": 2010}, 3, 3),
     ("shares_bought_symbol", "priya", {"symbol": "aapl"}, 20, 20),
-    ("batches_with_symbol", "priya", {"symbol": "msft"}, 2, 2),
+    ("batches_with_symbol", "priya", {"symbol": "msft"}, 3, 3),
     ("batches_with_symbol", "priya", {"symbol": "aapl"}, 2, 2),
     # Q5: Σ total of sells × 0.995 (totals stored as strings)
     ("revenue_year", "priya", {"year": 2010}, 1099.5 * 0.995, 1099.5 * 0.995),
     ("revenue_symbol", "priya", {"symbol": "aapl"}, 200.5 * 0.995, 200.5 * 0.995),
     ("revenue_symbol_year", "priya", {"symbol": "msft", "year": 2010}, 1099.5 * 0.995, 1099.5 * 0.995),
     ("revenue_month", "priya", {"month": 1, "year": 2010}, 995.0, 995.0),
+    # Q6: tech names = {adbe, amd, crm, csco, intc, nvda, team, znga}; msft and aapl are not members
+    ("tech_sell_trades_year", "priya", {"year": 2012}, 1, 1),
+    ("tech_sell_trades_year", "priya", {"year": 2010}, 0, 0),
+    ("tech_shares_sold_year", "priya", {"year": 2012}, 7, 7),
+    ("tech_sell_share_month", "priya", {"month": 4, "year": 2012}, 0.5, 0.5),
+    ("tech_sellers_year", "priya", {"year": 2012}, 1, 1),
+    ("tech_sellers_year", "priya", {"year": 2010}, 0, 0),
 ]
 
 
